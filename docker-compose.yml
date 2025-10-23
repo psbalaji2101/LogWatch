@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  opensearch-node1:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: opensearch-node1
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin
+      - plugins.security.ssl.http.enabled=true
+      - plugins.security.ssl.http.pemcert_filepath=esnode.pem
+      - plugins.security.ssl.http.pemkey_filepath=esnode-key.pem
+      - plugins.security.ssl.http.pemtrustedcas_filepath=root-ca.pem
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data1:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    networks:
+      - logwatch-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u admin:admin https://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: logwatch-backend
+    env_file:
+      - .env
+    environment:
+      - OPENSEARCH_HOST=opensearch-node1
+      - PYTHONUNBUFFERED=1
+      - PASSLIB_BCRYPT_NOCHECK=1
+    volumes:
+      - ./logs_in:/logs_in
+      - backend-data:/data
+      - ./backend/app:/app/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      opensearch-node1:
+        condition: service_healthy
+    networks:
+      - logwatch-net
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: logwatch-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - logwatch-net
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  opensearch-data1:
+  backend-data:
+
+networks:
+  logwatch-net:
+    driver: bridge
