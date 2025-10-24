@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = "INFO"
+
+    # Add AI settings
+    groq_api_key: Optional[str] = None
+    ai_provider: str = "groq"
+    # groq_model: str = "llama-3.1-70b-versatile"
+    groq_model: str = "llama-3.3-70b-versatile"  # Changed from llama-3.1-70b-versatile
+
+
     
     class Config:
         extra = "ignore"  # <-- allow extra keys like vite_api_url

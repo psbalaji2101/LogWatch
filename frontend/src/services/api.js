@@ -44,3 +44,16 @@ export const login = async (username, password) => {
   
   return response.data
 }
+
+// Add these new functions
+
+export const analyzeLogs = async (data) => {
+  const response = await api.post('/api/chat/analyze', data)
+  return response.data
+}
+
+export const chatFeedback = async (data) => {
+  const response = await api.post('/api/chat/feedback', data)
+  return response.data
+}
+
