@@ -1,9 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-// import { analyzeLogschatFeedback } from '../services/api'
 import { analyzeLogs, chatFeedback } from '../services/api'
-
 import ChatTimeline from './ChatTimeline'
 
 function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
@@ -32,12 +30,12 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
     }
   }
 
-  const analyzeWithConfig = async (keywords, timeWindow) => {
+  const analyzeWithConfig = async (keywords, timeWindow, naturalLanguage = null) => {
     const userMessage = {
       role: 'user',
-      content: keywords 
+      content: naturalLanguage || (keywords 
         ? `Analyze logs with keywords: "${keywords}" from last ${timeWindow} minutes`
-        : `Analyze logs from last ${timeWindow} minutes`,
+        : `Analyze logs from last ${timeWindow} minutes`),
       timestamp: new Date().toISOString(),
       id: Date.now()
     }
@@ -55,7 +53,8 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
       const response = await analyzeLogs({
         keywords: keywords || undefined,
         time_window_minutes: timeWindow,
-        chat_history: chatHistory
+        chat_history: chatHistory,
+        natural_language_query: naturalLanguage || undefined
       })
 
       const assistantMessage = {
@@ -84,18 +83,62 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
   }
 
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!input.trim() || loading) return
+    e.preventDefault();
+    if (!input.trim() || loading) return;
 
-    // Parse natural language for keywords and time
-    const timeMatch = input.match(/(\d+)\s*(min|minutes|hour|hours|h)/i)
-    const timeWindow = timeMatch 
-      ? (timeMatch[2].startsWith('h') ? parseInt(timeMatch[1]) * 60 : parseInt(timeMatch[1]))
-      : 30
+    // Parse natural language intelligently
+    let keywords = null;
+    let timeWindow = 30;  // Default
 
-    await analyzeWithConfig(input, timeWindow)
-    setInput('')
-  }
+    // Extract keywords (improved parsing)
+    const lowerInput = input.toLowerCase();
+    
+    // Extract time window
+    const timeMatch = input.match(/(\d+)\s*(min|minutes|minute|hour|hours|h)/i);
+    if (timeMatch) {
+      const num = parseInt(timeMatch[1]);
+      const unit = timeMatch[2];
+      timeWindow = unit.startsWith('h') ? num * 60 : num;
+    }
+    
+    // Extract search keywords (smart parsing)
+    if (lowerInput.includes('error')) {
+      keywords = 'ERROR';
+    } else if (lowerInput.includes('warning')) {
+      keywords = 'WARNING';
+    } else if (lowerInput.includes('database')) {
+      keywords = 'database';
+    } else if (lowerInput.includes('payment')) {
+      keywords = 'payment';
+    } else if (lowerInput.includes('memory')) {
+      keywords = 'memory';
+    } else if (lowerInput.includes('timeout')) {
+      keywords = 'timeout';
+    } else if (lowerInput.includes('fail')) {
+      keywords = 'fail';
+    }
+    
+    // If query is just a question, don't use it as keywords
+    if (lowerInput.startsWith('what') || 
+        lowerInput.startsWith('how') || 
+        lowerInput.startsWith('why') ||
+        lowerInput.startsWith('analyze')) {
+      // Extract the subject of the question
+      const errorMatch = lowerInput.match(/error|errors/i);
+      const warningMatch = lowerInput.match(/warning|warnings/i);
+      
+      if (errorMatch) {
+        keywords = 'ERROR';
+      } else if (warningMatch) {
+        keywords = 'WARNING';
+      }
+      // Otherwise, leave keywords as null (search all logs)
+    }
+
+    // Call with parsed values AND original input as natural language
+    await analyzeWithConfig(keywords, timeWindow, input);
+    setInput('');
+  };
 
   const handleFeedback = async (messageId, rating) => {
     try {
@@ -283,6 +326,34 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
           >
             Send
           </button>
+        </div>
+        
+        {/* Helper text with examples */}
+        <div className="mt-2 text-xs text-gray-500">
+          <p className="font-semibold mb-1">Try asking:</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setInput("What errors occurred?")}
+              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+            >
+              "What errors occurred?"
+            </button>
+            <button
+              type="button"
+              onClick={() => setInput("Find database issues")}
+              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+            >
+              "Find database issues"
+            </button>
+            <button
+              type="button"
+              onClick={() => setInput("Analyze logs from last hour")}
+              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+            >
+              "Analyze logs from last hour"
+            </button>
+          </div>
         </div>
       </form>
     </div>

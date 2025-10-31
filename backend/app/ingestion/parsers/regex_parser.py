@@ -24,8 +24,9 @@ class RegexParser(BaseParser):
             r'(?P<timestamp>\w+\s+\d+\s+\d+:\d+:\d+) (?P<host>\S+) (?P<process>\S+): (?P<message>.*)'
         ),
         'timestamp_level_message': re.compile(
-            r'\[?(?P<timestamp>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*)\]?\s+(?P<level>\w+):?\s+(?P<message>.*)'
+        r'^(?P<timestamp>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})\s+(?P<level>[A-Z]+)\s+(?P<message>.+)$'
         )
+    
     }
     
     def __init__(self, patterns: Dict[str, re.Pattern] = None):

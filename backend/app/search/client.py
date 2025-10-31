@@ -275,8 +275,24 @@ def search_logs(
     ]
     if source_file:
         must_clauses.append({"term": {"source_file.keyword": source_file}})
+    
     if query:
-        must_clauses.append({"multi_match": {"query": query, "fields": ["raw_line", "tokens", "fields.*"]}})
+        # Improved search - explicitly target fields.level for better matching
+        must_clauses.append({
+            "query_string": {
+                "query": query,
+                "fields": [
+                    "raw_line",
+                    "tokens",
+                    "fields.level^3",      # Boost level field significantly
+                    "fields.message^2",     # Boost message field
+                    "fields.service",
+                    "fields.error_type",
+                    "fields.endpoint"
+                ],
+                "default_operator": "OR"
+            }
+        })
 
     body = {
         "query": {"bool": {"must": must_clauses}},

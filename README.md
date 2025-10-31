@@ -43,16 +43,25 @@ make dev /
 docker compose up -f 
 
 Create log file
-python scripts/generate_logs.py --output ./logs_in --count 10000
+python scripts/generate_logs.py --output ./logs_in --count 100
+python scripts/generate_realistic_logs.py --output ./logs_in
 
 Ingest Logs to the Application
 python -m app.cli.ingest --file ./logs_in/sample_logs.json
+docker compose exec backend python -m app.cli.ingest --directory /logs_in
 
 setup OpenSearch
 python scripts/setup_opensearch.py
 
 start watcher
 docker compose exec backend python -m app.cli.watch --directory /logs_in
+
+cleanup OpenSearch DB data
+docker volume rm logingestion_opensearch-data1
+docker compose exec backend python scripts/setup_opensearch.py
+
+curl -X DELETE -k -u admin:admin 'https://localhost:9200/logs-*'
+
 
 -------------------------------------------------------------------------
 backend
@@ -84,3 +93,12 @@ curl -X GET "http://localhost:8000/api/logs?start_time=2025-10-20T14:00:00Z&end_
 curl -X GET "http://localhost:8000/api/logs?timestamp=2025-10-20T14:30:00Z&window_seconds=60"
 
 curl -X POST http://localhost:8000/api/logs/search -H "Content-Type: application/json" -d ' { "query": "error", "start_time": "2025-10-20T00:00:00Z", "end_time": "2025-10-20T23:59:59Z" }'
+
+curl -k -u admin:admin 'https://localhost:9200/logs-*/_count?pretty'
+
+curl -X POST http://localhost:8000/api/chat/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keywords": "ERROR",
+    "time_window_minutes": 60
+  }' | jq '.summary'

@@ -48,7 +48,8 @@ Be concise but thorough. Focus on actionable insights."""
         timestamp: Optional[datetime] = None,
         keywords: Optional[str] = None,
         time_window_minutes: int = 30,
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        source_file: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyze logs and return AI insights
@@ -62,7 +63,7 @@ Be concise but thorough. Focus on actionable insights."""
         Returns:
             Dictionary with analysis, suggestions, and metadata
         """
-        
+
         # Determine time range
         if timestamp is None:
             timestamp = datetime.utcnow()
@@ -81,7 +82,8 @@ Be concise but thorough. Focus on actionable insights."""
                 start_time=start_time,
                 end_time=end_time,
                 query=keywords,
-                page=1,
+                source_file=source_file,
+                page=50,
                 page_size=ai_settings.max_logs_per_analysis
             )
             
@@ -97,7 +99,8 @@ Be concise but thorough. Focus on actionable insights."""
                         "total_logs": 0,
                         "errors": 0,
                         "warnings": 0,
-                        "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}"
+                        "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
+                        "source_file": source_file
                     },
                     "suggested_queries": [],
                     "chart_data": None,
@@ -109,6 +112,22 @@ Be concise but thorough. Focus on actionable insights."""
             
             # Build messages for AI
             messages = [{"role": "system", "content": self.system_prompt}]
+
+            file_context = ""
+            if source_file:
+                file_context = f"\n**IMPORTANT**: User specifically requested analysis of ONLY logs from file: {source_file}\n"
+            
+            user_prompt = f"""
+        Analyze logs from {start_time.isoformat()} to {end_time.isoformat()}.
+        {file_context}
+        Keywords: {keywords or 'all'}
+        Total logs found: {len(logs)}
+
+        Logs:
+        {log_context}
+
+        Provide comprehensive analysis focused on these specific logs.
+        """            
             
             # Add chat history for context (last 5 exchanges)
             if chat_history:
@@ -296,3 +315,57 @@ def get_analyzer() -> LogAnalyzer:
     if _analyzer is None:
         _analyzer = LogAnalyzer()
     return _analyzer
+
+
+def parse_natural_language_query(query: str) -> dict:
+    """
+    Parse natural language query using AI
+    
+    Args:
+        query: User's natural language query
+    
+    Returns:
+        {
+            "keywords": "error database",
+            "time_window_minutes": 60
+        }
+    """
+    
+    # Simple parsing rules
+    query_lower = query.lower()
+    
+    # Extract time window
+    time_window = 30  # Default
+    time_patterns = [
+        (r'(\d+)\s*hour', 60),
+        (r'(\d+)\s*h\b', 60),
+        (r'(\d+)\s*min', 1),
+    ]
+    
+    for pattern, multiplier in time_patterns:
+        match = re.search(pattern, query_lower)
+        if match:
+            time_window = int(match.group(1)) * multiplier
+            break
+    
+    # Extract keywords
+    keywords = None
+    keyword_mapping = {
+        'error': 'ERROR',
+        'warning': 'WARNING',
+        'database': 'database',
+        'payment': 'payment',
+        'timeout': 'timeout',
+        'memory': 'memory',
+        'fail': 'fail',
+    }
+    
+    for word, keyword in keyword_mapping.items():
+        if word in query_lower:
+            keywords = keyword
+            break
+    
+    return {
+        "keywords": keywords,
+        "time_window_minutes": time_window
+    }

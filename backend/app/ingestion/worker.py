@@ -8,7 +8,7 @@ from datetime import datetime
 import uuid
 
 from app.ingestion.parsers import (
-    JSONParser, CSVParser, RegexParser, HeuristicParser
+    JSONParser, CSVParser, RegexParser, HeuristicParser, ISO8601Parser
 )
 from app.ingestion.checkpoint import CheckpointManager
 from app.search.client import get_opensearch_client, bulk_index_logs
@@ -24,6 +24,7 @@ class IngestionWorker:
         self.checkpoint_manager = CheckpointManager()
         self.parsers = [
             JSONParser(),
+            ISO8601Parser(),
             CSVParser(),
             RegexParser(),
             HeuristicParser()  # Fallback
@@ -57,40 +58,6 @@ class IngestionWorker:
             # Seek to offset
             if offset > 0:
                 f.seek(offset)
-            
-            # for line in f:
-            #     line_number += 1
-            #     line = line.strip()
-                
-            #     if not line:
-            #         continue
-                
-            #     # Parse line
-            #     parsed = self._parse_line(line)
-                
-            #     # Create document
-            #     doc = {
-            #         'timestamp': parsed['timestamp'].isoformat() if parsed['timestamp'] else datetime.utcnow().isoformat(),
-            #         'source_file': file_path,
-            #         'line_number': line_number,
-            #         'raw_line': line,
-            #         'tokens': parsed['tokens'],
-            #         'fields': parsed['fields'],
-            #         'ingest_id': self.ingest_id
-            #     }
-                
-            #     batch.append(doc)
-                
-            #     # Bulk index when batch is full
-            #     if len(batch) >= self.batch_size:
-            #         self._flush_batch(batch)
-            #         batch = []
-                    
-            #         # Update checkpoint
-            #         current_offset = f.tell()
-            #         last_modified = path.stat().st_mtime
-            #         self.checkpoint_manager.set_checkpoint(file_path, current_offset, last_modified)
-            
 
             while True:
                 current_position = f.tell()  # Get position BEFORE reading
