@@ -385,5 +385,6 @@ MIT License - See LICENSE file for details
 
 **Built with ❤️ by Balaji PS**
 
-Version: 1.0.0  
-Last Updated: October 2025
+Version: 1.0.0 
+Created: September 2025
+Last Updated: November 2025
