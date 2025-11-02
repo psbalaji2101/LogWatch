@@ -6,6 +6,7 @@ from .csv_parser import CSVParser
 from .regex_parser import RegexParser
 from .heuristic_parser import HeuristicParser
 from .iso8601_parser import ISO8601Parser
+from .otlp_parser import OTLPParser
 
 
 __all__ = [
@@ -14,5 +15,6 @@ __all__ = [
     "CSVParser",
     "RegexParser",
     "HeuristicParser",
-    "ISO8601Parser"
+    "ISO8601Parser",
+    "OTLPParser",
 ]

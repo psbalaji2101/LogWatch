@@ -279,7 +279,8 @@ LogWatch is a distributed, microservices-based log analysis platform designed fo
 ┌──────────────┐
 │ Chat API     │ 3. Extract parameters
 │              │    - keywords: "errors"
-│              │    - time_window: 60 minutes
+│              │    - time_window: 30 minutes(defalt)
+│              │    - source: <file name>
 └──────┬───────┘
        │ 4. Fetch logs from OpenSearch
        ↓

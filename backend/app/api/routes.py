@@ -6,6 +6,8 @@ from typing import Optional
 from datetime import datetime, timedelta
 import logging
 
+from pydantic import BaseModel
+
 from app.api.models import (
     TokenResponse, LogQueryRequest, LogQueryResponse,
     LogSearchRequest, AggregationRequest, AggregationResponse,
@@ -66,7 +68,7 @@ async def query_logs(
         
         # Default to last hour if no time specified
         if not start_time or not end_time:
-            end_time = datetime.utcnow()
+            end_time = datetime.now()
             start_time = end_time - timedelta(hours=1)
         
         client = get_opensearch_client()
@@ -169,3 +171,11 @@ async def get_stats(token: Optional[str] = Depends(jwt_bearer)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+class LogSearchRequest(BaseModel):
+    """Log search request model"""
+    start_time: str
+    end_time: str
+    query: Optional[str] = None
+    page: int = 1
+    page_size: int = 50

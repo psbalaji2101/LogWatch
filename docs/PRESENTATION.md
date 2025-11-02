@@ -427,7 +427,7 @@ docker compose up -d
 
 **Balaji PS**  
 Email: balajipsb2001@gmail.com  
-Project Repository: [GitHub Link]  
+Project Repository: https://github.com/psbalaji2101/LogWatch# 
 Live Demo: http://localhost:3000
 
 ---

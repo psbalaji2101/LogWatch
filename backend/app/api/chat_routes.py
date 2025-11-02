@@ -49,38 +49,53 @@ class FeedbackRequest(BaseModel):
 
 def parse_natural_language_query(query: str) -> dict:
     """
-    Parse natural language query to extract keywords, time, and file filters
+    Parse natural language query to extract keywords, time, and file filters.
+    Supports phrases like:
+      - "last 5 hours"
+      - "past 30 minutes"
+      - "analyze logs from the past week"
+      - "in format1_2025-11-02.log"
     """
-    
     query_lower = query.lower()
     
-    # Extract time window
+    # Default time window (in minutes)
     time_window = 30
+
+    # Expanded regex patterns
     time_patterns = [
-        (r'(\d+)\s*day', 1440),           # X days → convert to minutes
-        (r'(\d+)\s*days', 1440),
-        (r'(\d+)\s*week', 10080),         # X weeks → 7*1440 minutes
-        (r'(\d+)\s*weeks', 10080),
-        (r'(\d+)\s*hour', 60),            # X hours
-        (r'(\d+)\s*hours', 60),
-        (r'(\d+)\s*h\b', 60),
-        (r'(\d+)\s*min', 1),
-        (r'(\d+)\s*minutes', 1),
-        # Also handle "past 30 days", "last 7 days" etc.
-        (r'past\s+(\d+)\s*day', 1440),
-        (r'last\s+(\d+)\s*day', 1440),
-        (r'past\s+(\d+)\s*week', 10080),
-        (r'last\s+(\d+)\s*week', 10080),
+        (r'\b(\d+)\s*minute(s)?\b', 1),
+        (r'\b(\d+)\s*min\b', 1),
+        (r'\b(\d+)\s*hour(s)?\b', 60),
+        (r'\b(\d+)\s*h\b', 60),
+        (r'\b(\d+)\s*day(s)?\b', 1440),
+        (r'\b(\d+)\s*week(s)?\b', 10080),
+        (r'\blast\s+(\d+)\s*minute(s)?\b', 1),
+        (r'\blast\s+(\d+)\s*hour(s)?\b', 60),
+        (r'\blast\s+(\d+)\s*day(s)?\b', 1440),
+        (r'\blast\s+(\d+)\s*week(s)?\b', 10080),
+        (r'\bpast\s+(\d+)\s*minute(s)?\b', 1),
+        (r'\bpast\s+(\d+)\s*hour(s)?\b', 60),
+        (r'\bpast\s+(\d+)\s*day(s)?\b', 1440),
+        (r'\bpast\s+(\d+)\s*week(s)?\b', 10080),
+        # Handle singular forms: "last hour", "past day", etc.
+        (r'\blast\s+hour\b', 60),
+        (r'\blast\s+day\b', 1440),
+        (r'\blast\s+week\b', 10080),
+        (r'\bpast\s+hour\b', 60),
+        (r'\bpast\s+day\b', 1440),
+        (r'\bpast\s+week\b', 10080),
     ]
-    
+
     for pattern, multiplier in time_patterns:
         match = re.search(pattern, query_lower)
         if match:
-            amount = int(match.group(1))
+            amount = int(match.group(1)) if match.groups()[0] else 1
             time_window = amount * multiplier
             break
-    time_window = min(time_window, 1440)  # Cap at 1440 minutes (1 day)
-    
+
+    # (Optional) remove cap if you want more than 1 day
+    # time_window = min(time_window, 1440)
+
     # Extract keywords
     keywords = None
     keyword_mapping = {
@@ -99,46 +114,35 @@ def parse_natural_language_query(query: str) -> dict:
         'crash': 'crash',
         'down': 'down',
     }
-    
+
     for word, keyword in keyword_mapping.items():
         if word in query_lower:
             keywords = keyword
             break
-    
-    # Extract source file (NEW)
+
+    # Extract file reference (if mentioned)
     source_file = None
-    
-    # Pattern 1: "file format1_date_only.log"
-    file_match = re.search(r'file\s+(\S+\.log)', query_lower)
-    if file_match:
-        source_file = file_match.group(1)
-    
-    # Pattern 2: "from format1_date_only.log"
-    if not source_file:
-        file_match = re.search(r'from\s+(\S+\.log)', query_lower)
-        if file_match:
-            source_file = file_match.group(1)
-    
-    # Pattern 3: "in format1_date_only.log"
-    if not source_file:
-        file_match = re.search(r'in\s+(\S+\.log)', query_lower)
-        if file_match:
-            source_file = file_match.group(1)
-    
-    # Pattern 4: Just the filename itself
-    if not source_file:
-        file_match = re.search(r'(format\d+_\w+\.log)', query_lower)
-        if file_match:
-            source_file = file_match.group(1)
-    
-    # Make sure to prepend the path
+    for pattern in [
+        r'file\s+(\S+\.log)',
+        r'from\s+(\S+\.log)',
+        r'in\s+(\S+\.log)',
+        r'(format\d+_\w+\.log)',
+    ]:
+        match = re.search(pattern, query_lower)
+        if match:
+            source_file = match.group(1)
+            break
+
     if source_file and not source_file.startswith('/'):
         source_file = f"/logs_in/{source_file}"
-    
+
+    logger.info(f"✅ [NL Parse] Query received: {query_lower}")
+    logger.info(f"✅ [NL Parse] Parsed -> time_window: {time_window}, keywords: {keywords}, source_file: {source_file}")
+
     return {
         "keywords": keywords,
         "time_window_minutes": time_window,
-        "source_file": source_file  # NEW
+        "source_file": source_file
     }
 
 
@@ -151,6 +155,8 @@ async def analyze_logs(
         # Parse natural language query if provided
         if request.natural_language_query:
             parsed = parse_natural_language_query(request.natural_language_query)
+            logger.info(f"Parsed NL query: {parsed}")
+            logger.info(f"Original request before override: {request}")
             
             # Override with parsed values (if not already set)
             if not request.keywords:
@@ -160,6 +166,8 @@ async def analyze_logs(
             if not request.source_file:
                 request.source_file = parsed.get('source_file')
         
+            logger.info(f"Modified request after override: {request}")
+            
         analyzer = get_analyzer()
         result = analyzer.analyze(
             timestamp=request.timestamp,

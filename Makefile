@@ -53,10 +53,19 @@ clean:
 	docker compose down -v
 	rm -rf backend/__pycache__
 	rm -rf backend/.pytest_cache
+	rm -rf backend/app/__pycache__
+	rm -rf backend/app/api/__pycache__
+	rm -rf backend/app/ai/__pycache__
+	rm -rf backend/app/auth/__pycache__
+	rm -rf backend/app/cli/__pycache__
+	rm -rf backend/app/search/__pycache__
+	rm -rf backend/app/ingestion/__pycache__
+	rm -rf backend/app/ingestion/parsers/__pycache__
 	rm -rf backend/htmlcov
 	rm -rf frontend/node_modules
 	rm -rf frontend/dist
 	rm -rf logs_in/*
+	rm -rf venv
 	@echo "Clean complete"
 
 setup:

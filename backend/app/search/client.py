@@ -303,6 +303,8 @@ def search_logs(
 
     try:
         response = client.search(index=index_name, body=body)
+        logger.info(f"Search query executed: {body}")
+        logger.info(f"Search response: {response}")
         logs = [hit['_source'] for hit in response['hits']['hits']]
         return {"total": response['hits']['total']['value'], "page": page, "page_size": page_size, "logs": logs}
     except Exception as e:

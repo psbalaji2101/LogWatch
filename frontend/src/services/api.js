@@ -23,8 +23,15 @@ export const fetchLogs = async (params) => {
   return response.data
 }
 
-export const searchLogs = async (data) => {
-  const response = await api.post('/api/logs/search', data)
+export const searchLogs = async (params) => {
+  const response = await api.post('/api/logs/search', {
+    start_time: params.start_time,
+    end_time: params.end_time,
+    query: params.query || null,
+    page: params.page || 1,
+    page_size: params.page_size || 50
+  });
+  
   return response.data
 }
 

@@ -59,6 +59,7 @@ Be concise but thorough. Focus on actionable insights."""
             keywords: Search keywords to filter logs
             time_window_minutes: How far back to look (default: 30)
             chat_history: Previous conversation for context
+            source_file: Specific log source file to filter
         
         Returns:
             Dictionary with analysis, suggestions, and metadata
@@ -72,18 +73,21 @@ Be concise but thorough. Focus on actionable insights."""
         start_time = timestamp - timedelta(minutes=time_window_minutes)
         
         logger.info(f"Analyzing logs from {start_time} to {end_time}")
+        logger.info(f"Keywords: {keywords}, Source file: {source_file}")
         
         # Fetch logs from OpenSearch
         client = get_opensearch_client()
         
         try:
+            # Use page=1 (first page). Passing a large page number here caused
+            # results to be empty when total hits < (page-1)*page_size.
             results = search_logs(
                 client,
                 start_time=start_time,
                 end_time=end_time,
                 query=keywords,
                 source_file=source_file,
-                page=50,
+                page=1,
                 page_size=ai_settings.max_logs_per_analysis
             )
             
@@ -93,10 +97,15 @@ Be concise but thorough. Focus on actionable insights."""
             logger.info(f"Fetched {len(logs)} logs (total: {total_count})")
             
             if not logs:
+                # When no logs are returned, still surface the total count
+                # from OpenSearch (could be >0 but pagination/offset issues
+                # or other filters caused an empty page). Also include
+                # time_window_minutes and keywords in the response so the
+                # API consumer sees the applied window.
                 return {
                     "analysis": "No logs found in the specified time range.",
                     "summary": {
-                        "total_logs": 0,
+                        "total_logs": total_count,
                         "errors": 0,
                         "warnings": 0,
                         "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
@@ -104,7 +113,9 @@ Be concise but thorough. Focus on actionable insights."""
                     },
                     "suggested_queries": [],
                     "chart_data": None,
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "time_window_minutes": time_window_minutes,
+                    "keywords": keywords
                 }
             
             # Prepare context for AI
@@ -168,7 +179,9 @@ Be concise but thorough. Focus on actionable insights."""
                 },
                 "suggested_queries": parsed_response['suggested_queries'],
                 "chart_data": chart_data,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "time_window_minutes": time_window_minutes,
+                "keywords": keywords
             }
             
         except Exception as e:

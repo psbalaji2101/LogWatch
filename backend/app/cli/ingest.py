@@ -36,7 +36,7 @@ async def main():
             logger.error(f"Directory not found: {directory}")
             return
         
-        files = list(directory.rglob("*.log")) + list(directory.rglob("*.txt")) + list(directory.rglob("*.json"))
+        files = list(directory.rglob("*.log")) + list(directory.rglob("*.txt")) + list(directory.rglob("*.json")) + list(directory.rglob("*.ndjson"))
         logger.info(f"Found {len(files)} log files")
         
         for file_path in files:

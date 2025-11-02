@@ -8,11 +8,12 @@ from datetime import datetime
 import uuid
 
 from app.ingestion.parsers import (
-    JSONParser, CSVParser, RegexParser, HeuristicParser, ISO8601Parser
+    JSONParser, CSVParser, RegexParser, HeuristicParser, ISO8601Parser, OTLPParser
 )
 from app.ingestion.checkpoint import CheckpointManager
 from app.search.client import get_opensearch_client, bulk_index_logs
 from app.config import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class IngestionWorker:
             ISO8601Parser(),
             CSVParser(),
             RegexParser(),
+            OTLPParser(),
             HeuristicParser()  # Fallback
         ]
         self.batch_size = settings.batch_size
@@ -77,7 +79,7 @@ class IngestionWorker:
                 
                 # Create document
                 doc = {
-                    'timestamp': parsed['timestamp'].isoformat() if parsed['timestamp'] else datetime.utcnow().isoformat(),
+                    'timestamp': parsed['timestamp'].isoformat() if parsed['timestamp'] else datetime.now().isoformat(),
                     'source_file': file_path,
                     'line_number': line_number,
                     'raw_line': line,
