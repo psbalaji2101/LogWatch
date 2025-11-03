@@ -277,19 +277,26 @@ def search_logs(
         must_clauses.append({"term": {"source_file.keyword": source_file}})
     
     if query:
-        # Improved search - explicitly target fields.level for better matching
+        # If fields param is provided, use it (parse comma-separated string if needed)
+        if fields:
+            if isinstance(fields, str):
+                field_list = [f.strip() for f in fields.split(",") if f.strip()]
+            else:
+                field_list = list(fields)
+        else:
+            field_list = [
+                "raw_line",
+                "tokens",
+                "fields.level^3",      # Boost level field significantly
+                "fields.message^2",     # Boost message field
+                "fields.service",
+                "fields.error_type",
+                "fields.endpoint"
+            ]
         must_clauses.append({
             "query_string": {
                 "query": query,
-                "fields": [
-                    "raw_line",
-                    "tokens",
-                    "fields.level^3",      # Boost level field significantly
-                    "fields.message^2",     # Boost message field
-                    "fields.service",
-                    "fields.error_type",
-                    "fields.endpoint"
-                ],
+                "fields": field_list,
                 "default_operator": "OR"
             }
         })

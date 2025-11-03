@@ -179,3 +179,4 @@ class LogSearchRequest(BaseModel):
     query: Optional[str] = None
     page: int = 1
     page_size: int = 50
+    fields: Optional[list[str]] = None

@@ -40,7 +40,7 @@ function Dashboard() {
       // Debounce search
       searchTimeoutRef.current = setTimeout(() => {
         loadSearchData()
-      }, 500)
+      }, 1000)
     } else {
       // If search cleared, load default immediately
       loadDefaultData()

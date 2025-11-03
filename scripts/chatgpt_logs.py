@@ -3,12 +3,17 @@ import random
 import uuid
 
 # Configuration for 2 days (from 2025-11-01 00:00 UTC to now UTC)
-start_time = datetime(2025, 11, 1, 0, 0, 0)
-end_time = datetime.utcnow()
+# start_time = datetime(2025, 11, 1, 0, 0, 0)
+# end_time = datetime.utcnow()
+# interval = timedelta(minutes=2)
+
+start_time = datetime(2025, 11, 1, 1, 0, 0)
+end_time = datetime(2025, 11, 3, 0, 0, 0)
 interval = timedelta(minutes=2)
 
 # Possible values for realistic log variety
-services = ["api-gateway", "auth-service", "payment-service", "user-service", "notification-service", "inventory-service"]
+#services = ["api-gateway", "auth-service", "payment-service", "user-service", "notification-service", "inventory-service"]
+services = ["payment-service", "user-service"]
 methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 endpoints = [
     "/api/users", "/api/login", "/api/logout", "/api/products", "/api/payments", "/api/orders",
@@ -49,7 +54,7 @@ while current_time < end_time:
     current_time += interval
 
 # Write to .log file
-log_file_path = "logs_in/system_logs_2025-11-01_to_now.log"
+log_file_path = "logs_in/system_logs_2025-11-01_to_now2.log"
 with open(log_file_path, "w") as f:
     f.write("\n".join(logs))
 
