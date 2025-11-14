@@ -78,7 +78,7 @@ def get_ai_provider(provider_name: str, **kwargs) -> AIProvider:
     if provider_name == "groq":
         return GroqProvider(
             api_key=kwargs.get('api_key'),
-            model=kwargs.get('model', 'llama-3.1-70b-versatile')
+            model=kwargs.get('model', 'llama-3.3-70b-versatile')
         )
     elif provider_name == "ollama":
         return OllamaProvider(

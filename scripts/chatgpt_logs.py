@@ -7,8 +7,8 @@ import uuid
 # end_time = datetime.utcnow()
 # interval = timedelta(minutes=2)
 
-start_time = datetime(2025, 11, 1, 1, 0, 0)
-end_time = datetime(2025, 11, 3, 0, 0, 0)
+start_time = datetime(2025, 11, 12, 1, 0, 0)
+end_time = datetime(2025, 11, 15, 0, 0, 0)
 interval = timedelta(minutes=2)
 
 # Possible values for realistic log variety

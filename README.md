@@ -175,11 +175,43 @@ curl -X POST "http://localhost:8000/api/chat/analyze" \
   -d '{
     "keywords": "ERROR",
     "time_window_minutes": 60
+<<<<<<< Updated upstream
+=======
+  }' | jq '.summary'
+
+
+-------------------------------------------------------------------------
+debug Calls made
+-------------------------------------------------------------------------
+
+echo "=== Checking Log Timestamps ==="
+curl -s -k -u admin:admin 'https://localhost:9200/logs-*/_search?pretty' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "aggs": {
+      "min": {"min": {"field": "timestamp"}},
+      "max": {"max": {"field": "timestamp"}}
+    }
+  }' | grep value_as_string
+
+echo -e "\n=== Testing Chatbot Query ==="
+curl -s -X POST http://localhost:8000/api/chat/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "natural_language_query": "Analyze logs from last 5 hour"
+  }' | jq '{
+    keywords,
+    time_window_minutes,
+    time_range: .summary.time_range,
+    total_logs: .summary.total_logs
+>>>>>>> Stashed changes
   }'
 ```
 
 ### AI Chatbot Usage
 
+<<<<<<< Updated upstream
 In the UI, click the chat button and try:
 - "Analyze logs from last 30 minutes"
 - "Find all database errors"
@@ -388,3 +420,5 @@ MIT License - See LICENSE file for details
 Version: 1.0.0 
 Created: September 2025
 Last Updated: November 2025
+=======
+>>>>>>> Stashed changes
