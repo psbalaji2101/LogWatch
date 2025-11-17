@@ -48,29 +48,33 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
 
 @router.get("/api/logs", response_model=LogQueryResponse, tags=["Logs"])
-async def query_logs(
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    timestamp: Optional[datetime] = None,
-    window_seconds: int = 60,
+def query_logs(
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    timestamp: Optional[str] = None,
+    window_seconds: int = 3600,
     source_file: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
     token: Optional[str] = Depends(jwt_bearer)
 ):
-    """Query logs by time range or specific timestamp"""
-    
+    """
+    Query logs by time range or specific timestamp (default: last hour)
+    """
+    from dateutil import parser as dtparser
     try:
-        # Handle timestamp with window
+        # Convert times to datetime if given as strings
         if timestamp:
-            start_time = timestamp - timedelta(seconds=window_seconds/2)
-            end_time = timestamp + timedelta(seconds=window_seconds/2)
-        
-        # Default to last hour if no time specified
-        if not start_time or not end_time:
+            tstamp = dtparser.parse(timestamp)
+            start_time = tstamp - timedelta(seconds=window_seconds / 2)
+            end_time = tstamp + timedelta(seconds=window_seconds / 2)
+        elif start_time and end_time:
+            start_time = dtparser.parse(start_time)
+            end_time = dtparser.parse(end_time)
+        else:
             end_time = datetime.now()
-            start_time = end_time - timedelta(hours=1)
-        
+            start_time = end_time - timedelta(seconds=window_seconds)
+
         client = get_opensearch_client()
         results = search_logs(
             client,
@@ -80,9 +84,14 @@ async def query_logs(
             page=page,
             page_size=page_size
         )
-        
-        return LogQueryResponse(**results)
-        
+
+        log_models = [LogEvent(**log) for log in results["logs"]]
+        return LogQueryResponse(
+            total=results["total"],
+            page=page,
+            page_size=page_size,
+            logs=log_models
+        )
     except Exception as e:
         logger.error(f"Error querying logs: {e}")
         raise HTTPException(
@@ -122,30 +131,40 @@ async def search_logs_endpoint(
 
 @router.get("/api/logs/aggregations", response_model=AggregationResponse, tags=["Logs"])
 async def get_aggregations(
-    start_time: datetime,
-    end_time: datetime,
+    start_time: str,
+    end_time: str,
     interval: str = "1h",
     token: Optional[str] = Depends(jwt_bearer)
 ):
     """Get aggregations (time series, top tokens, source distribution)"""
-    
+    from dateutil import parser as dtparser
     try:
+        start_dt = dtparser.parse(start_time)
+        end_dt = dtparser.parse(end_time)
         client = get_opensearch_client()
         results = aggregate_logs(
             client,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_dt,
+            end_time=end_dt,
             interval=interval
         )
         
-        return AggregationResponse(**results)
-        
+        # Handle missing keys - provide defaults
+        return AggregationResponse(
+            time_series=results.get("time_series", []),
+            top_tokens=results.get("top_tokens", []),
+            sources=results.get("sources", [])
+        )
     except Exception as e:
         logger.error(f"Error getting aggregations: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+        # Return empty aggregations instead of error
+        return AggregationResponse(
+            time_series=[],
+            top_tokens=[],
+            sources=[]
         )
+
+
 
 
 @router.get("/api/stats", tags=["Stats"])

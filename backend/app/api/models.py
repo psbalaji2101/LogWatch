@@ -19,13 +19,18 @@ class TokenResponse(BaseModel):
 
 class LogEvent(BaseModel):
     """Log event model"""
-    timestamp: datetime
-    source_file: str
-    line_number: int
-    raw_line: str
+    timestamp: Optional[datetime] = None
+    source_file: Optional[str] = None
+    line_number: Optional[int] = None
+    raw_line: Optional[str] = None
     tokens: List[str] = []
     fields: Dict[str, Any] = {}
     ingest_id: Optional[str] = None
+
+    # If you sometimes return chunk logs:
+    chunk_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    summary_cached: Optional[bool] = None
 
 
 class LogQueryRequest(BaseModel):
