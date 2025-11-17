@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 import logging
 import json
 import re
+import asyncio
 
 from app.ai.config import ai_settings
 from app.ai.providers import get_ai_provider
-from app.ai.aggregator import get_orchestrator
 from app.search.client import get_opensearch_client, search_logs
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,6 @@ class LogAnalyzer:
             api_key=ai_settings.groq_api_key,
             model=ai_settings.groq_model
         )
-        self.orchestrator = get_orchestrator()
         self.system_prompt = self._build_system_prompt()
     
     def _build_system_prompt(self) -> str:
@@ -44,7 +43,7 @@ When suggesting queries, use OpenSearch/Lucene syntax like:
 - `message:"database timeout" AND timestamp:[now-1h TO now]`
 - `status:500 AND path:/api/users`
 
-Be concise but thorough. Focus on actionable insights based on the aggregated data provided."""
+Be concise but thorough. Focus on actionable insights based on the provided data."""
     
     def analyze(
         self,
@@ -55,15 +54,10 @@ Be concise but thorough. Focus on actionable insights based on the aggregated da
         source_file: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Analyze logs using aggregation-first approach.
+        Analyze logs and return AI insights
         
-        FLOW:
-        1. Run aggregation orchestration (100-300ms)
-        2. Get priority queries from aggregation
-        3. Fetch representative logs for top issues
-        4. Build enhanced AI context (aggregation + sample logs)
-        5. Call LLM for synthesis
-        6. Parse and return results
+        NOTE: This is a SYNCHRONOUS method (not async)
+        All async operations inside must be handled properly
         
         Args:
             timestamp: Reference timestamp (default: now)
@@ -83,121 +77,81 @@ Be concise but thorough. Focus on actionable insights based on the aggregated da
         end_time = timestamp
         start_time = timestamp - timedelta(minutes=time_window_minutes)
         
-        logger.info(f"🔍 Starting aggregation-first analysis: {start_time} to {end_time}")
+        logger.info(f"🔍 Starting analysis: {start_time} to {end_time}")
         logger.info(f"   Keywords: {keywords}, Source file: {source_file}")
         
+        # Fetch logs from OpenSearch
         client = get_opensearch_client()
         
         try:
-            # ============ STAGE 1: AGGREGATION ORCHESTRATION ============
-            logger.info("⚙️  Stage 1: Running aggregation orchestration...")
-
-            agg_result = self.orchestrator.orchestrate_analysis(
+            # Fetch logs directly (synchronous)
+            logger.info("📥 Fetching logs...")
+            results = search_logs(
+                client,
                 start_time=start_time,
                 end_time=end_time,
-                keywords=keywords,
+                query=keywords,
                 source_file=source_file,
-                top_k=10
+                page=1,
+                page_size=ai_settings.max_logs_per_analysis
             )
             
-            total_logs = agg_result['total_logs']
-            logger.info(f"   ✅ Aggregation complete: {total_logs} logs analyzed")
-            logger.info(f"   Error rate: {agg_result['error_rate']:.1%}")
-            logger.info(f"   Top services: {agg_result['top_services'][:3]}")
+            logs = results['logs']
+            total_count = results['total']
             
-            # If no logs, return early
-            if total_logs == 0:
+            logger.info(f"✅ Fetched {len(logs)} logs (total: {total_count})")
+            
+            # If no logs found
+            if not logs:
+                logger.warning("⚠️  No logs found in range")
                 return {
                     "analysis": "No logs found in the specified time range.",
                     "summary": {
-                        "total_logs": 0,
+                        "total_logs": total_count,
                         "errors": 0,
                         "warnings": 0,
                         "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
                         "source_file": source_file,
-                        "analysis_type": "aggregation-first"
+                        "analysis_type": "standard"
                     },
                     "suggested_queries": [],
                     "chart_data": None,
                     "timestamp": datetime.utcnow().isoformat(),
                     "time_window_minutes": time_window_minutes,
-                    "keywords": keywords,
-                    "aggregation_result": agg_result
+                    "keywords": keywords
                 }
             
-            # ============ STAGE 2: FETCH REPRESENTATIVE LOGS ============
-            logger.info("⚙️  Stage 2: Fetching representative logs from priority queries...")
+            # Prepare context for AI
+            logger.info("📝 Preparing log context...")
+            log_context = self._prepare_log_context(logs, total_count)
             
-            all_representative_logs = []
-            priority_queries = agg_result['priority_queries']
-            
-            # Fetch logs for top 3 priority queries (max 50 logs each for context)
-            for i, query in enumerate(priority_queries[:3], 1):
-                logger.info(f"   Query {i}/3: {query[:60]}...")
-                
-                try:
-                    results = search_logs(
-                        client,
-                        start_time=start_time,
-                        end_time=end_time,
-                        query=query,
-                        page_size=50
-                    )
-                    
-                    logs_in_query = results['logs']
-                    all_representative_logs.extend(logs_in_query)
-                    logger.info(f"   ✅ Fetched {len(logs_in_query)} logs for query {i}")
-                    
-                except Exception as e:
-                    logger.warning(f"   ⚠️  Failed to fetch logs for query {i}: {e}")
-                    continue
-            
-            # Deduplicate by line_number + source_file
-            unique_logs = {}
-            for log in all_representative_logs:
-                key = (log.get('source_file'), log.get('line_number'))
-                if key not in unique_logs:
-                    unique_logs[key] = log
-            
-            all_representative_logs = list(unique_logs.values())[:100]  # Max 100 logs for context
-            logger.info(f"   ✅ Total unique logs: {len(all_representative_logs)}")
-            
-            # ============ STAGE 3: BUILD ENHANCED CONTEXT ============
-            logger.info("⚙️  Stage 3: Building enhanced AI context...")
-            
-            enhanced_context = self._build_enhanced_context(
-                agg_result, all_representative_logs, total_logs
-            )
-            
-            # ============ STAGE 4: BUILD MESSAGES FOR LLM ============
+            # Build messages for AI
             messages = [{"role": "system", "content": self.system_prompt}]
-            
+
             file_context = ""
             if source_file:
-                file_context = f"\n**IMPORTANT**: Analysis is filtered to file: {source_file}\n"
+                file_context = f"\n**IMPORTANT**: User specifically requested analysis of ONLY logs from file: {source_file}\n"
             
-            user_prompt = f"""Analyze the following log summary and samples:
-
-Time Range: {start_time.isoformat()} to {end_time.isoformat()}
+            user_prompt = f"""Analyze logs from {start_time.isoformat()} to {end_time.isoformat()}.
 {file_context}
-Total Logs in Range: {total_logs}
-Error Rate: {agg_result['error_rate']:.1%}
-Warning Rate: {agg_result['warning_rate']:.1%}
+Keywords: {keywords or 'all'}
+Total logs found: {len(logs)}
 
-{enhanced_context}
+Logs:
+{log_context}
 
-Provide comprehensive analysis based on the aggregated metrics and sample logs above."""
+Provide comprehensive analysis focused on these specific logs."""
             
-            # Add chat history for context (last 5 exchanges)
+            # Add chat history for context (last 10 messages = 5 Q&A pairs)
             if chat_history:
-                for msg in chat_history[-10:]:  # Last 5 Q&A pairs
+                for msg in chat_history[-10:]:
                     messages.append(msg)
             
+            # Add current query
             messages.append({"role": "user", "content": user_prompt})
             
-            # ============ STAGE 5: CALL LLM ============
-            logger.info("⚙️  Stage 5: Calling LLM for synthesis...")
-            
+            # Generate AI response
+            logger.info("🤖 Calling AI provider for analysis...")
             ai_response = self.provider.generate(
                 messages,
                 temperature=ai_settings.ai_temperature,
@@ -206,106 +160,64 @@ Provide comprehensive analysis based on the aggregated metrics and sample logs a
             
             logger.info("✅ AI analysis complete")
             
-            # ============ STAGE 6: PARSE RESPONSE ============
-            parsed_response = self._parse_ai_response(ai_response, all_representative_logs)
+            # Parse response and extract structured data
+            parsed_response = self._parse_ai_response(ai_response, logs)
             
-            # Generate chart data from aggregation
-            chart_data = self._generate_chart_data_from_aggregation(agg_result)
+            # Generate chart data
+            chart_data = self._generate_chart_data(logs, start_time, end_time)
             
-            # ============ RETURN RESULTS ============
-            result = {
+            return {
                 "analysis": ai_response,
                 "summary": {
-                    "total_logs": total_logs,
-                    "analyzed_logs": len(all_representative_logs),
+                    "total_logs": total_count,
+                    "analyzed_logs": len(logs),
                     "errors": parsed_response['error_count'],
                     "warnings": parsed_response['warning_count'],
-                    "error_rate": agg_result['error_rate'],
                     "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
                     "keywords": keywords,
-                    "analysis_type": "aggregation-first"
+                    "analysis_type": "standard"
                 },
                 "suggested_queries": parsed_response['suggested_queries'],
                 "chart_data": chart_data,
                 "timestamp": datetime.utcnow().isoformat(),
                 "time_window_minutes": time_window_minutes,
-                "keywords": keywords,
-                "aggregation_result": agg_result  # Include for frontend use
+                "keywords": keywords
             }
-            
-            logger.info(f"✅ Analysis complete: {result['summary']}")
-            
-            return result
             
         except Exception as e:
             logger.error(f"❌ Analysis error: {e}", exc_info=True)
             raise
     
-    def _build_enhanced_context(
-        self,
-        agg_result: Dict[str, Any],
-        logs: List[Dict[str, Any]],
-        total_count: int
-    ) -> str:
-        """Build enhanced context combining aggregation + sample logs"""
+    def _prepare_log_context(self, logs: List[Dict], total_count: int) -> str:
+        """Format logs for AI context"""
         
         context_lines = []
+        context_lines.append(f"Total logs in range: {total_count}")
+        context_lines.append(f"Showing {len(logs)} logs:\n")
         
-        # === AGGREGATION SUMMARY ===
-        context_lines.append("## AGGREGATION SUMMARY")
-        context_lines.append(f"- Total Logs: {total_count}")
-        context_lines.append(f"- Error Rate: {agg_result['error_rate']:.1%}")
-        context_lines.append(f"- Warning Rate: {agg_result['warning_rate']:.1%}")
-        context_lines.append("")
-        
-        # === TOP SERVICES ===
-        if agg_result['top_services']:
-            context_lines.append("### Top Services by Volume:")
-            for service, count in agg_result['top_services'][:5]:
-                pct = (count / max(total_count, 1)) * 100
-                context_lines.append(f"- {service}: {count} logs ({pct:.1f}%)")
-            context_lines.append("")
-        
-        # === TOP ERRORS ===
-        if agg_result['top_errors']:
-            context_lines.append("### Top Errors:")
-            for error, count in agg_result['top_errors'][:5]:
-                pct = (count / max(total_count, 1)) * 100
-                context_lines.append(f"- {error[:80]}: {count} occurrences ({pct:.1f}%)")
-            context_lines.append("")
-        
-        # === TIME BUCKETS ===
-        if agg_result['time_buckets']:
-            context_lines.append("### Error Timeline (5-min buckets):")
-            for bucket in agg_result['time_buckets'][-6:]:  # Last 6 buckets
-                error_rate = bucket['error_rate']
+        for i, log in enumerate(logs[:50], 1):
+            try:
+                timestamp = log.get('timestamp', 'N/A')
+                level = log.get('fields', {}).get('level', 'INFO')
+                service = log.get('fields', {}).get('service', log.get('source_file', 'unknown').split('/')[-1])
+                message = log.get('fields', {}).get('message', log.get('raw_line', ''))[:150]
+                
                 context_lines.append(
-                    f"- {bucket['timestamp']}: {bucket['total_count']} logs, "
-                    f"{error_rate:.1%} errors"
+                    f"{i}. [{timestamp}] {level} | {service} | {message}"
                 )
-            context_lines.append("")
+            except Exception as e:
+                logger.warning(f"Error formatting log {i}: {e}")
+                continue
         
-        # === SAMPLE LOGS ===
-        context_lines.append("## REPRESENTATIVE LOG SAMPLES")
-        context_lines.append(f"Showing {len(logs)} representative logs:\n")
-        
-        for i, log in enumerate(logs[:20], 1):  # Show first 20 samples
-            timestamp = log.get('timestamp', 'N/A')
-            level = log.get('fields', {}).get('level', 'INFO')
-            service = log.get('fields', {}).get('service', log.get('source_file', 'unknown').split('/')[-1])
-            message = log.get('fields', {}).get('message', log.get('raw_line', ''))[:150]
-            
-            context_lines.append(f"{i}. [{timestamp}] {level} | {service} | {message}")
-        
-        if len(logs) > 20:
-            context_lines.append(f"\n... and {len(logs) - 20} more logs")
+        if len(logs) > 50:
+            context_lines.append(f"\n... and {len(logs) - 50} more logs")
         
         return "\n".join(context_lines)
     
     def _parse_ai_response(self, response: str, logs: List[Dict]) -> Dict[str, Any]:
         """Parse AI response to extract structured data"""
         
-        # Count errors and warnings from sample logs
+        # Count errors and warnings from logs
         error_count = sum(1 for log in logs if log.get('fields', {}).get('level') == 'ERROR')
         warning_count = sum(1 for log in logs if log.get('fields', {}).get('level') in ['WARN', 'WARNING'])
         
@@ -316,9 +228,9 @@ Provide comprehensive analysis based on the aggregated metrics and sample logs a
         code_blocks = re.findall(r'```(.*?)```', response, re.DOTALL)
         for block in code_blocks:
             queries = [q.strip() for q in block.split('\n') if q.strip() and not q.strip().startswith('#')]
-            suggested_queries.extend(queries[:3])  # Max 3 per block
+            suggested_queries.extend(queries[:3])
         
-        # Pattern 2: Look for inline queries (backtick-wrapped)
+        # Pattern 2: Look for inline queries
         inline_queries = re.findall(r'`([^`]+:.*?[^`]+)`', response)
         suggested_queries.extend(inline_queries[:5])
         
@@ -331,32 +243,67 @@ Provide comprehensive analysis based on the aggregated metrics and sample logs a
             "suggested_queries": suggested_queries
         }
     
-    def _generate_chart_data_from_aggregation(
+    def _generate_chart_data(
         self,
-        agg_result: Dict[str, Any]
+        logs: List[Dict],
+        start_time: datetime,
+        end_time: datetime
     ) -> Dict[str, Any]:
-        """Generate chart data from aggregation results"""
+        """Generate chart data for error timeline"""
         
-        timeline = []
+        # Group logs by 5-minute buckets
+        bucket_minutes = 5
+        buckets = {}
         
-        for bucket in agg_result.get('time_buckets', []):
-            timeline.append({
-                "time": bucket['timestamp'],
-                "errors": bucket['error_count'],
-                "warnings": bucket['warning_count'],
-                "total": bucket['total_count']
-            })
+        current = start_time
+        while current <= end_time:
+            bucket_key = current.strftime('%Y-%m-%d %H:%M')
+            buckets[bucket_key] = {"errors": 0, "warnings": 0, "info": 0, "total": 0}
+            current += timedelta(minutes=bucket_minutes)
+        
+        # Count logs per bucket
+        for log in logs:
+            try:
+                log_time = datetime.fromisoformat(log['timestamp'].replace('Z', '+00:00'))
+                bucket_key = log_time.replace(
+                    minute=(log_time.minute // bucket_minutes) * bucket_minutes,
+                    second=0, microsecond=0
+                ).strftime('%Y-%m-%d %H:%M')
+                
+                if bucket_key in buckets:
+                    level = log.get('fields', {}).get('level', 'INFO').upper()
+                    buckets[bucket_key]['total'] += 1
+                    
+                    if level == 'ERROR':
+                        buckets[bucket_key]['errors'] += 1
+                    elif level in ['WARN', 'WARNING']:
+                        buckets[bucket_key]['warnings'] += 1
+                    else:
+                        buckets[bucket_key]['info'] += 1
+            except Exception as e:
+                logger.debug(f"Error processing log for chart: {e}")
+                continue
+        
+        # Convert to chart format
+        timeline = [
+            {
+                "time": key,
+                "errors": val['errors'],
+                "warnings": val['warnings'],
+                "info": val['info']
+            }
+            for key, val in sorted(buckets.items())
+        ]
         
         return {
             "timeline": timeline,
-            "bucket_minutes": 5,
-            "error_rate": agg_result.get('error_rate', 0),
-            "warning_rate": agg_result.get('warning_rate', 0)
+            "bucket_minutes": bucket_minutes
         }
 
 
 # Global analyzer instance
 _analyzer = None
+
 
 def get_analyzer() -> LogAnalyzer:
     """Get or create log analyzer instance"""

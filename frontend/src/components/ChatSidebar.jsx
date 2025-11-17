@@ -1,12 +1,12 @@
 // frontend/src/components/ChatSidebar.jsx
 /**
- * Production-Ready Chat Sidebar Component
+ * Production-Ready Chat Sidebar Component (v3)
  * 
- * FIXED (v2):
- * - Uses ES6 imports (not require)
- * - No process.env issues
- * - Safe async handling
- * - Proper error recovery
+ * FIXED:
+ * - Proper modal/portal rendering
+ * - Always visible when isOpen=true
+ * - Click outside to close
+ * - z-index properly set
  */
 
 import React, { useState, useRef, useEffect } from 'react'
@@ -27,13 +27,15 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
 
   // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [messages])
 
   // Focus input when sidebar opens
   useEffect(() => {
     if (isOpen && inputRef.current) {
-      inputRef.current.focus()
+      setTimeout(() => inputRef.current?.focus(), 100)
     }
   }, [isOpen])
 
@@ -52,7 +54,7 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
     try {
       console.log('💬 User message:', userMessage)
 
-      // Add user message to chat immediately
+      // Add user message to chat
       setMessages(prev => [...prev, { role: 'user', content: userMessage }])
 
       // Call API
@@ -119,18 +121,39 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
     setError(null)
   }
 
-  if (!isOpen) return null
+  // Don't render if not open
+  if (!isOpen) {
+    console.log('🙈 ChatSidebar not open, not rendering')
+    return null
+  }
+
+  console.log('👁️ ChatSidebar rendering (isOpen=true)')
 
   return (
-    <div className="fixed inset-0 z-40 lg:hidden">
-      {/* Overlay */}
+    <>
+      {/* Backdrop overlay - click to close */}
       <div 
-        className="absolute inset-0 bg-black bg-opacity-50 transition-opacity"
-        onClick={onClose}
+        className="fixed inset-0 bg-black bg-opacity-50 z-30 transition-opacity"
+        onClick={() => {
+          console.log('📌 Backdrop clicked, closing chat')
+          onClose()
+        }}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            console.log('🔑 Escape pressed, closing chat')
+            onClose()
+          }
+        }}
+        aria-label="Close chat"
       />
 
-      {/* Sidebar */}
-      <div className="absolute right-0 top-0 bottom-0 w-full sm:w-96 bg-white shadow-2xl flex flex-col overflow-hidden rounded-l-lg">
+      {/* Sidebar Panel */}
+      <div 
+        className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-white shadow-2xl flex flex-col overflow-hidden z-40"
+        onClick={(e) => e.stopPropagation()}
+      >
         
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-blue-700 flex-shrink-0">
@@ -138,9 +161,13 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
             <span>🤖</span> AI Assistant
           </h2>
           <button
-            onClick={onClose}
+            onClick={() => {
+              console.log('❌ Close button clicked')
+              onClose()
+            }}
             className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded transition"
             title="Close"
+            aria-label="Close sidebar"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -154,7 +181,7 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
             // Separator
             if (message.type === 'separator') {
               return (
-                <div key={idx} className="flex justify-center">
+                <div key={idx} className="flex justify-center py-2">
                   <p className="text-xs text-gray-500 font-medium">{message.content}</p>
                 </div>
               )
@@ -166,7 +193,7 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
                 <div key={idx} className="flex justify-center">
                   <button
                     onClick={() => handleSuggestedQueryClick(message.content)}
-                    className="max-w-xs px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-lg text-xs font-mono border border-blue-300 transition truncate"
+                    className="max-w-xs px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-lg text-xs font-mono border border-blue-300 transition truncate cursor-pointer"
                     title={message.content}
                   >
                     → {message.content}
@@ -258,7 +285,7 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
           </div>
         </form>
       </div>
-    </div>
+    </>
   )
 }
 
