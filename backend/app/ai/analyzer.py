@@ -199,9 +199,20 @@ Provide comprehensive analysis focused on these specific logs."""
             try:
                 timestamp = log.get('timestamp', 'N/A')
                 level = log.get('fields', {}).get('level', 'INFO')
-                service = log.get('fields', {}).get('service', log.get('source_file', 'unknown').split('/')[-1])
+                #service = log.get('fields', {}).get('service', log.get('source_file', 'unknown').split('/')[-1])
                 message = log.get('fields', {}).get('message', log.get('raw_line', ''))[:150]
-                
+                service = log.get('fields', {}).get('service')
+
+                if not service or service == 'unknown':
+                    raw_line = log.get('raw_line', '')
+                    import re
+                    match = re.search(r'\[([^\]]+)-service\]|\[([^\]]+)\]|service[:\s]*([^\s,\]]+)', raw_line, re.IGNORECASE)
+                    if match:
+                        service = match.group(1) or match.group(2) or match.group(3)
+                        service = service.replace('-service', '').strip()
+                    if not service or service == 'unknown':
+                        service = log.get('source_file', 'unknown').split('/')[-1].split('.')
+
                 context_lines.append(
                     f"{i}. [{timestamp}] {level} | {service} | {message}"
                 )
