@@ -7,13 +7,13 @@ import uuid
 # end_time = datetime.utcnow()
 # interval = timedelta(minutes=2)
 
-start_time = datetime(2025, 11, 1, 1, 0, 0)
-end_time = datetime(2025, 11, 3, 0, 0, 0)
+start_time = datetime(2025, 11, 15, 0, 1, 0)
+end_time = datetime(2025, 11, 19, 0, 0, 0)
 interval = timedelta(minutes=2)
 
 # Possible values for realistic log variety
-#services = ["api-gateway", "auth-service", "payment-service", "user-service", "notification-service", "inventory-service"]
-services = ["payment-service", "user-service"]
+services = ["api-gateway", "auth-service", "payment-service", "user-service", "notification-service", "inventory-service"]
+#services = ["payment-service", "user-service"]
 methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 endpoints = [
     "/api/users", "/api/login", "/api/logout", "/api/products", "/api/payments", "/api/orders",
@@ -38,7 +38,7 @@ logs = []
 current_time = start_time
 while current_time < end_time:
     timestamp = current_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-    level = "INFO" if random.random() > 0.2 else "ERROR"
+    level = "INFO" if random.random() > 0.2 else "WARNING" if random.random() > 0.5 else "ERROR"
     service = random.choice(services)
     message = random.choice(messages)
     method = random.choice(methods)
@@ -54,7 +54,7 @@ while current_time < end_time:
     current_time += interval
 
 # Write to .log file
-log_file_path = "logs_in/system_logs_2025-11-01_to_now2.log"
+log_file_path = "logs_in/system_logs_info_warning_error.log"
 with open(log_file_path, "w") as f:
     f.write("\n".join(logs))
 

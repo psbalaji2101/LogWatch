@@ -1,10 +1,12 @@
-"""Log analysis service using AI"""
+# backend/app/ai/analyzer.py
+"""Log analysis service using aggregation-first approach with AI"""
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 import json
 import re
+import asyncio
 
 from app.ai.config import ai_settings
 from app.ai.providers import get_ai_provider
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class LogAnalyzer:
-    """Analyzes logs using AI"""
+    """Analyzes logs using aggregation-first orchestration + AI synthesis"""
     
     def __init__(self):
         self.provider = get_ai_provider(
@@ -28,9 +30,9 @@ class LogAnalyzer:
         """Build system prompt for log analysis"""
         return """You are an expert log analysis assistant. Your job is to analyze application logs and provide:
 
-1. **Summary**: Brief overview of log activity
+1. **Summary**: Brief overview of log activity and key issues
 2. **Issues Found**: List of errors, warnings, and anomalies with severity
-3. **Root Cause Analysis**: Potential causes for each issue
+3. **Root Cause Analysis**: Potential causes for each issue based on patterns
 4. **Recommendations**: Actionable steps to resolve issues
 5. **Suggested Queries**: OpenSearch query strings for drill-down (use Lucene query syntax)
 
@@ -41,7 +43,7 @@ When suggesting queries, use OpenSearch/Lucene syntax like:
 - `message:"database timeout" AND timestamp:[now-1h TO now]`
 - `status:500 AND path:/api/users`
 
-Be concise but thorough. Focus on actionable insights."""
+Be concise but thorough. Focus on actionable insights based on the provided data."""
     
     def analyze(
         self,
@@ -53,6 +55,9 @@ Be concise but thorough. Focus on actionable insights."""
     ) -> Dict[str, Any]:
         """
         Analyze logs and return AI insights
+        
+        NOTE: This is a SYNCHRONOUS method (not async)
+        All async operations inside must be handled properly
         
         Args:
             timestamp: Reference timestamp (default: now)
@@ -72,15 +77,15 @@ Be concise but thorough. Focus on actionable insights."""
         end_time = timestamp
         start_time = timestamp - timedelta(minutes=time_window_minutes)
         
-        logger.info(f"Analyzing logs from {start_time} to {end_time}")
-        logger.info(f"Keywords: {keywords}, Source file: {source_file}")
+        logger.info(f"🔍 Starting analysis: {start_time} to {end_time}")
+        logger.info(f"   Keywords: {keywords}, Source file: {source_file}")
         
         # Fetch logs from OpenSearch
         client = get_opensearch_client()
         
         try:
-            # Use page=1 (first page). Passing a large page number here caused
-            # results to be empty when total hits < (page-1)*page_size.
+            # Fetch logs directly (synchronous)
+            logger.info("📥 Fetching logs...")
             results = search_logs(
                 client,
                 start_time=start_time,
@@ -94,14 +99,11 @@ Be concise but thorough. Focus on actionable insights."""
             logs = results['logs']
             total_count = results['total']
             
-            logger.info(f"Fetched {len(logs)} logs (total: {total_count})")
+            logger.info(f"✅ Fetched {len(logs)} logs (total: {total_count})")
             
+            # If no logs found
             if not logs:
-                # When no logs are returned, still surface the total count
-                # from OpenSearch (could be >0 but pagination/offset issues
-                # or other filters caused an empty page). Also include
-                # time_window_minutes and keywords in the response so the
-                # API consumer sees the applied window.
+                logger.warning("⚠️  No logs found in range")
                 return {
                     "analysis": "No logs found in the specified time range.",
                     "summary": {
@@ -109,7 +111,8 @@ Be concise but thorough. Focus on actionable insights."""
                         "errors": 0,
                         "warnings": 0,
                         "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
-                        "source_file": source_file
+                        "source_file": source_file,
+                        "analysis_type": "standard"
                     },
                     "suggested_queries": [],
                     "chart_data": None,
@@ -119,6 +122,7 @@ Be concise but thorough. Focus on actionable insights."""
                 }
             
             # Prepare context for AI
+            logger.info("📝 Preparing log context...")
             log_context = self._prepare_log_context(logs, total_count)
             
             # Build messages for AI
@@ -128,38 +132,33 @@ Be concise but thorough. Focus on actionable insights."""
             if source_file:
                 file_context = f"\n**IMPORTANT**: User specifically requested analysis of ONLY logs from file: {source_file}\n"
             
-            user_prompt = f"""
-        Analyze logs from {start_time.isoformat()} to {end_time.isoformat()}.
-        {file_context}
-        Keywords: {keywords or 'all'}
-        Total logs found: {len(logs)}
+            user_prompt = f"""Analyze logs from {start_time.isoformat()} to {end_time.isoformat()}.
+{file_context}
+Keywords: {keywords or 'all'}
+Total logs found: {len(logs)}
 
-        Logs:
-        {log_context}
+Logs:
+{log_context}
 
-        Provide comprehensive analysis focused on these specific logs.
-        """            
+Provide comprehensive analysis focused on these specific logs."""
             
-            # Add chat history for context (last 5 exchanges)
+            # Add chat history for context (last 10 messages = 5 Q&A pairs)
             if chat_history:
-                for msg in chat_history[-10:]:  # Last 5 Q&A pairs
+                for msg in chat_history[-10:]:
                     messages.append(msg)
             
             # Add current query
-            user_query = self._build_user_query(
-                start_time, end_time, keywords, time_window_minutes, log_context
-            )
-            messages.append({"role": "user", "content": user_query})
+            messages.append({"role": "user", "content": user_prompt})
             
             # Generate AI response
-            logger.info("Calling AI provider for analysis...")
+            logger.info("🤖 Calling AI provider for analysis...")
             ai_response = self.provider.generate(
                 messages,
                 temperature=ai_settings.ai_temperature,
                 max_tokens=ai_settings.ai_max_tokens
             )
             
-            logger.info("AI analysis complete")
+            logger.info("✅ AI analysis complete")
             
             # Parse response and extract structured data
             parsed_response = self._parse_ai_response(ai_response, logs)
@@ -175,7 +174,8 @@ Be concise but thorough. Focus on actionable insights."""
                     "errors": parsed_response['error_count'],
                     "warnings": parsed_response['warning_count'],
                     "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
-                    "keywords": keywords
+                    "keywords": keywords,
+                    "analysis_type": "standard"
                 },
                 "suggested_queries": parsed_response['suggested_queries'],
                 "chart_data": chart_data,
@@ -185,7 +185,7 @@ Be concise but thorough. Focus on actionable insights."""
             }
             
         except Exception as e:
-            logger.error(f"Analysis error: {e}", exc_info=True)
+            logger.error(f"❌ Analysis error: {e}", exc_info=True)
             raise
     
     def _prepare_log_context(self, logs: List[Dict], total_count: int) -> str:
@@ -193,50 +193,42 @@ Be concise but thorough. Focus on actionable insights."""
         
         context_lines = []
         context_lines.append(f"Total logs in range: {total_count}")
-        context_lines.append(f"Sample of {len(logs)} logs:\n")
+        context_lines.append(f"Showing {len(logs)} logs:\n")
         
-        for i, log in enumerate(logs[:50], 1):  # First 50 for detailed view
-            timestamp = log.get('timestamp', 'N/A')
-            level = log.get('fields', {}).get('level', 'INFO')
-            source = log.get('source_file', 'unknown').split('/')[-1]
-            raw_line = log.get('raw_line', '')[:200]  # Truncate long lines
-            
-            context_lines.append(
-                f"{i}. [{timestamp}] {level} | {source} | {raw_line}"
-            )
+        for i, log in enumerate(logs[:50], 1):
+            try:
+                timestamp = log.get('timestamp', 'N/A')
+                level = log.get('fields', {}).get('level', 'INFO')
+                #service = log.get('fields', {}).get('service', log.get('source_file', 'unknown').split('/')[-1])
+                message = log.get('fields', {}).get('message', log.get('raw_line', ''))[:150]
+                service = log.get('fields', {}).get('service')
+
+                if not service or service == 'unknown':
+                    raw_line = log.get('raw_line', '')
+                    import re
+                    match = re.search(r'\[([^\]]+)-service\]|\[([^\]]+)\]|service[:\s]*([^\s,\]]+)', raw_line, re.IGNORECASE)
+                    if match:
+                        service = match.group(1) or match.group(2) or match.group(3)
+                        service = service.replace('-service', '').strip()
+                    if not service or service == 'unknown':
+                        service = log.get('source_file', 'unknown').split('/')[-1].split('.')
+
+                context_lines.append(
+                    f"{i}. [{timestamp}] {level} | {service} | {message}"
+                )
+            except Exception as e:
+                logger.warning(f"Error formatting log {i}: {e}")
+                continue
         
         if len(logs) > 50:
             context_lines.append(f"\n... and {len(logs) - 50} more logs")
         
         return "\n".join(context_lines)
     
-    def _build_user_query(
-        self,
-        start_time: datetime,
-        end_time: datetime,
-        keywords: Optional[str],
-        time_window: int,
-        log_context: str
-    ) -> str:
-        """Build user query for AI"""
-        
-        query_parts = [
-            f"Analyze the following logs from the past {time_window} minutes",
-            f"(from {start_time.strftime('%Y-%m-%d %H:%M:%S')} to {end_time.strftime('%Y-%m-%d %H:%M:%S')})."
-        ]
-        
-        if keywords:
-            query_parts.append(f"\nFiltered by keywords: '{keywords}'")
-        
-        query_parts.append(f"\n\n{log_context}")
-        query_parts.append("\n\nProvide a comprehensive analysis with actionable insights.")
-        
-        return " ".join(query_parts)
-    
     def _parse_ai_response(self, response: str, logs: List[Dict]) -> Dict[str, Any]:
         """Parse AI response to extract structured data"""
         
-        # Count errors and warnings
+        # Count errors and warnings from logs
         error_count = sum(1 for log in logs if log.get('fields', {}).get('level') == 'ERROR')
         warning_count = sum(1 for log in logs if log.get('fields', {}).get('level') in ['WARN', 'WARNING'])
         
@@ -244,16 +236,16 @@ Be concise but thorough. Focus on actionable insights."""
         suggested_queries = []
         
         # Pattern 1: Look for queries in code blocks
-        code_blocks = re.findall(r'``````', response, re.DOTALL)
+        code_blocks = re.findall(r'```(.*?)```', response, re.DOTALL)
         for block in code_blocks:
             queries = [q.strip() for q in block.split('\n') if q.strip() and not q.strip().startswith('#')]
-            suggested_queries.extend(queries[:3])  # Max 3 per block
+            suggested_queries.extend(queries[:3])
         
         # Pattern 2: Look for inline queries
-        inline_queries = re.findall(r'`([^`]+:.*?)`', response)
+        inline_queries = re.findall(r'`([^`]+:.*?[^`]+)`', response)
         suggested_queries.extend(inline_queries[:5])
         
-        # Deduplicate and limit
+        # Deduplicate and limit to 5
         suggested_queries = list(dict.fromkeys(suggested_queries))[:5]
         
         return {
@@ -299,7 +291,8 @@ Be concise but thorough. Focus on actionable insights."""
                         buckets[bucket_key]['warnings'] += 1
                     else:
                         buckets[bucket_key]['info'] += 1
-            except:
+            except Exception as e:
+                logger.debug(f"Error processing log for chart: {e}")
                 continue
         
         # Convert to chart format
@@ -322,6 +315,7 @@ Be concise but thorough. Focus on actionable insights."""
 # Global analyzer instance
 _analyzer = None
 
+
 def get_analyzer() -> LogAnalyzer:
     """Get or create log analyzer instance"""
     global _analyzer
@@ -332,53 +326,103 @@ def get_analyzer() -> LogAnalyzer:
 
 def parse_natural_language_query(query: str) -> dict:
     """
-    Parse natural language query using AI
+    Parse natural language query using regex patterns.
+    
+    Supports phrases like:
+    - "last 5 hours"
+    - "past 30 minutes"
+    - "errors from database"
+    - "in format1_2025-11-02.log"
     
     Args:
         query: User's natural language query
     
     Returns:
         {
-            "keywords": "error database",
-            "time_window_minutes": 60
+            "keywords": "ERROR",
+            "time_window_minutes": 300,
+            "source_file": "/logs_in/format1_2025-11-02.log"
         }
     """
     
-    # Simple parsing rules
     query_lower = query.lower()
+    logger.info(f"✅ [NL Parse] Query: {query_lower}")
     
-    # Extract time window
+    # Extract time window (in minutes)
     time_window = 30  # Default
+    
     time_patterns = [
-        (r'(\d+)\s*hour', 60),
-        (r'(\d+)\s*h\b', 60),
-        (r'(\d+)\s*min', 1),
+        (r'\b(\d+)\s*minute(s)?\b', 1),
+        (r'\b(\d+)\s*min\b', 1),
+        (r'\b(\d+)\s*hour(s)?\b', 60),
+        (r'\b(\d+)\s*h\b', 60),
+        (r'\b(\d+)\s*day(s)?\b', 1440),
+        (r'\b(\d+)\s*week(s)?\b', 10080),
+        (r'\blast\s+(\d+)\s*minute(s)?\b', 1),
+        (r'\blast\s+(\d+)\s*hour(s)?\b', 60),
+        (r'\blast\s+(\d+)\s*day(s)?\b', 1440),
+        (r'\blast\s+(\d+)\s*week(s)?\b', 10080),
+        (r'\bpast\s+(\d+)\s*minute(s)?\b', 1),
+        (r'\bpast\s+(\d+)\s*hour(s)?\b', 60),
+        (r'\bpast\s+(\d+)\s*day(s)?\b', 1440),
+        (r'\bpast\s+(\d+)\s*week(s)?\b', 10080),
     ]
     
     for pattern, multiplier in time_patterns:
         match = re.search(pattern, query_lower)
         if match:
-            time_window = int(match.group(1)) * multiplier
+            amount = int(match.group(1))
+            time_window = amount * multiplier
+            logger.info(f"✅ [NL Parse] Detected time window: {time_window} minutes")
             break
     
     # Extract keywords
     keywords = None
     keyword_mapping = {
         'error': 'ERROR',
+        'errors': 'ERROR',
         'warning': 'WARNING',
+        'warnings': 'WARNING',
+        'warn': 'WARN',
         'database': 'database',
+        'db': 'database',
         'payment': 'payment',
         'timeout': 'timeout',
         'memory': 'memory',
         'fail': 'fail',
+        'failure': 'fail',
+        'crash': 'crash',
+        'down': 'down',
     }
     
     for word, keyword in keyword_mapping.items():
         if word in query_lower:
             keywords = keyword
+            logger.info(f"✅ [NL Parse] Detected keyword: {keyword}")
             break
     
-    return {
+    # Extract source file
+    source_file = None
+    for pattern in [
+        r'file\s+(\S+\.log)',
+        r'from\s+(\S+\.log)',
+        r'in\s+(\S+\.log)',
+        r'(format\d+_\w+\.log)',
+    ]:
+        match = re.search(pattern, query_lower)
+        if match:
+            source_file = match.group(1)
+            if not source_file.startswith('/'):
+                source_file = f"/logs_in/{source_file}"
+            logger.info(f"✅ [NL Parse] Detected source file: {source_file}")
+            break
+    
+    result = {
         "keywords": keywords,
-        "time_window_minutes": time_window
+        "time_window_minutes": time_window,
+        "source_file": source_file
     }
+    
+    logger.info(f"✅ [NL Parse] Final result: {result}")
+    
+    return result

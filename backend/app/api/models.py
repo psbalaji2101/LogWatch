@@ -23,8 +23,7 @@ from datetime import datetime  # ← Change from str to datetime
 
 class LogEvent(BaseModel):
     """Log event model"""
-    # ✅ Changed from Optional[str] to Optional[datetime]
-    timestamp: Optional[datetime] = None  # Now stores datetime object
+    timestamp: Optional[datetime] = None
     source_file: Optional[str] = None
     line_number: Optional[int] = None
     raw_line: Optional[str] = None
@@ -43,6 +42,11 @@ class LogEvent(BaseModel):
     class Config:
         extra = "allow"
 
+
+    # If you sometimes return chunk logs:
+    chunk_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    summary_cached: Optional[bool] = None
 
 
 class LogQueryRequest(BaseModel):

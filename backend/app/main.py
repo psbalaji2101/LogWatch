@@ -9,6 +9,7 @@ from app.config import settings
 from app.api.routes import router as api_router
 from app.auth.jwt_handler import create_access_token
 from app.api.chat_routes import router as chat_router
+from app.api.orchestration_routes import router as orchestration_router
 
 
 # Configure logging
@@ -39,6 +40,7 @@ app.add_middleware(
 # Include API routes
 app.include_router(api_router)
 app.include_router(chat_router)
+app.include_router(orchestration_router)
 
 
 @app.get("/")

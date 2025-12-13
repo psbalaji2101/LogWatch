@@ -64,7 +64,7 @@ function LogViewer({ logs, loading, page, total, onPageChange }) {
                   
                   <div className="mt-1 flex gap-2 text-xs text-gray-500">
                     <span className="bg-gray-100 px-2 py-0.5 rounded">
-                      {log.source_file.split('/').pop()}
+                      {(log.source_file?.split('/')?.pop()) || 'unknown'}
                     </span>
                     
                     {log.fields.level && (

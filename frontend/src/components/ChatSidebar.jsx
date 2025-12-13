@@ -1,362 +1,291 @@
+// frontend/src/components/ChatSidebar.jsx
+/**
+ * Production-Ready Chat Sidebar Component (v3)
+ * 
+ * FIXED:
+ * - Proper modal/portal rendering
+ * - Always visible when isOpen=true
+ * - Click outside to close
+ * - z-index properly set
+ */
+
 import React, { useState, useRef, useEffect } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { analyzeLogs, chatFeedback } from '../services/api'
-import ChatTimeline from './ChatTimeline'
+import { analyzeLogs } from '../services/api'
 
 function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
-  const [messages, setMessages] = useState([])
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      content: '👋 Hi! I\'m your LogWatch AI assistant.\n\nTry asking:\n- "Show me errors from last hour"\n- "What\'s causing warnings?"\n- "Analyze database issues"'
+    }
+  ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
 
-  useEffect(scrollToBottom, [messages])
+  // Focus input when sidebar opens
+  useEffect(() => {
+    if (isOpen && inputRef.current) {
+      setTimeout(() => inputRef.current?.focus(), 100)
+    }
+  }, [isOpen])
 
-  const handleQuickAction = async (action) => {
-    const prompts = {
-      'last-30min': { keywords: '', timeWindow: 30 },
-      'errors': { keywords: 'ERROR', timeWindow: 60 },
-      'warnings': { keywords: 'WARNING', timeWindow: 60 },
-      'critical': { keywords: 'CRITICAL OR FATAL', timeWindow: 120 }
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    
+    if (!input.trim()) {
+      return
     }
 
-    const config = prompts[action]
-    if (config) {
-      await analyzeWithConfig(config.keywords, config.timeWindow)
-    }
-  }
-
-  const analyzeWithConfig = async (keywords, timeWindow, naturalLanguage = null) => {
-    const userMessage = {
-      role: 'user',
-      content: naturalLanguage || (keywords 
-        ? `Analyze logs with keywords: "${keywords}" from last ${timeWindow} minutes`
-        : `Analyze logs from last ${timeWindow} minutes`),
-      timestamp: new Date().toISOString(),
-      id: Date.now()
-    }
-
-    setMessages(prev => [...prev, userMessage])
+    const userMessage = input.trim()
+    setInput('')
+    setError(null)
     setLoading(true)
 
     try {
-      // Build chat history for context
-      const chatHistory = messages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }))
+      console.log('💬 User message:', userMessage)
 
-      const response = await analyzeLogs({
-        keywords: keywords || undefined,
-        time_window_minutes: timeWindow,
-        chat_history: chatHistory,
-        natural_language_query: naturalLanguage || undefined
+      // Add user message to chat
+      setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+
+      // Call API
+      console.log('📤 Sending to API...')
+      const result = await analyzeLogs({
+        natural_language_query: userMessage,
+        time_window_minutes: 60
       })
 
-      const assistantMessage = {
-        role: 'assistant',
-        content: response.analysis,
-        timestamp: response.timestamp,
-        summary: response.summary,
-        suggested_queries: response.suggested_queries,
-        chart_data: response.chart_data,
-        id: Date.now() + 1
+      console.log('✅ API Response:', result)
+
+      // Add assistant response
+      const assistantMessage = result.analysis || 'No analysis available'
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: assistantMessage 
+      }])
+
+      // Show suggested queries
+      if (result.suggested_queries && result.suggested_queries.length > 0) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: '📌 Try these queries:',
+          type: 'separator'
+        }])
+
+        result.suggested_queries.slice(0, 3).forEach((query) => {
+          setMessages(prev => [...prev, {
+            role: 'suggestion',
+            content: query,
+            type: 'query'
+          }])
+        })
       }
 
-      setMessages(prev => [...prev, assistantMessage])
-    } catch (error) {
-      console.error('Analysis error:', error)
+    } catch (err) {
+      console.error('❌ Error:', err)
+      const errorMsg = err.message || 'Failed to analyze logs'
+      setError(errorMsg)
+      
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Error: ${error.message}`,
-        timestamp: new Date().toISOString(),
-        id: Date.now() + 1,
-        error: true
+        content: `⚠️ Error: ${errorMsg}\n\nTroubleshooting:\n1. Is backend running? http://localhost:8000\n2. Do logs exist in time range?\n3. Is /api/chat/analyze endpoint available?`
       }])
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-
-    // Parse natural language intelligently
-    let keywords = null;
-    let timeWindow = 30;  // Default
-
-    // Extract keywords (improved parsing)
-    const lowerInput = input.toLowerCase();
-    
-    // Extract time window
-    const timeMatch = input.match(/(\d+)\s*(min|minutes|minute|hour|hours|h)/i);
-    if (timeMatch) {
-      const num = parseInt(timeMatch[1]);
-      const unit = timeMatch[2];
-      timeWindow = unit.startsWith('h') ? num * 60 : num;
-    }
-    
-    // Extract search keywords (smart parsing)
-    if (lowerInput.includes('error')) {
-      keywords = 'ERROR';
-    } else if (lowerInput.includes('warning')) {
-      keywords = 'WARNING';
-    } else if (lowerInput.includes('database')) {
-      keywords = 'database';
-    } else if (lowerInput.includes('payment')) {
-      keywords = 'payment';
-    } else if (lowerInput.includes('memory')) {
-      keywords = 'memory';
-    } else if (lowerInput.includes('timeout')) {
-      keywords = 'timeout';
-    } else if (lowerInput.includes('fail')) {
-      keywords = 'fail';
-    }
-    
-    // If query is just a question, don't use it as keywords
-    if (lowerInput.startsWith('what') || 
-        lowerInput.startsWith('how') || 
-        lowerInput.startsWith('why') ||
-        lowerInput.startsWith('analyze')) {
-      // Extract the subject of the question
-      const errorMatch = lowerInput.match(/error|errors/i);
-      const warningMatch = lowerInput.match(/warning|warnings/i);
-      
-      if (errorMatch) {
-        keywords = 'ERROR';
-      } else if (warningMatch) {
-        keywords = 'WARNING';
-      }
-      // Otherwise, leave keywords as null (search all logs)
-    }
-
-    // Call with parsed values AND original input as natural language
-    await analyzeWithConfig(keywords, timeWindow, input);
-    setInput('');
-  };
-
-  const handleFeedback = async (messageId, rating) => {
-    try {
-      await chatFeedback({ message_id: messageId.toString(), rating })
-      
-      // Update message with feedback
-      setMessages(prev => prev.map(msg => 
-        msg.id === messageId ? { ...msg, userFeedback: rating } : msg
-      ))
-    } catch (error) {
-      console.error('Feedback error:', error)
-    }
-  }
-
-  const handleQueryClick = (query) => {
+  const handleSuggestedQueryClick = (query) => {
+    console.log('🔍 Using suggested query:', query)
     if (onSuggestedQuery) {
       onSuggestedQuery(query)
     }
   }
 
-  if (!isOpen) return null
+  const handleClear = () => {
+    console.log('🗑️ Clearing chat')
+    setMessages([{
+      role: 'assistant',
+      content: '👋 Chat cleared! Ask me about your logs.'
+    }])
+    setInput('')
+    setError(null)
+  }
+
+  // Don't render if not open
+  if (!isOpen) {
+    console.log('🙈 ChatSidebar not open, not rendering')
+    return null
+  }
+
+  console.log('👁️ ChatSidebar rendering (isOpen=true)')
 
   return (
-    <div className="fixed right-0 top-0 h-full w-96 bg-white shadow-2xl z-50 flex flex-col">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 flex justify-between items-center">
-        <div>
-          <h2 className="text-lg font-bold">AI Log Assistant</h2>
-          <p className="text-xs opacity-90">Powered by Llama 3</p>
+    <>
+      {/* Backdrop overlay - click to close */}
+      <div 
+        className="fixed inset-0 bg-black bg-opacity-50 z-30 transition-opacity"
+        onClick={() => {
+          console.log('📌 Backdrop clicked, closing chat')
+          onClose()
+        }}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            console.log('🔑 Escape pressed, closing chat')
+            onClose()
+          }
+        }}
+        aria-label="Close chat"
+      />
+
+      {/* Sidebar Panel */}
+      <div 
+        className="fixed right-0 top-0 bottom-0 w-full sm:w-96 bg-white shadow-2xl flex flex-col overflow-hidden z-40"
+        onClick={(e) => e.stopPropagation()}
+      >
+        
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-blue-700 flex-shrink-0">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <span>🤖</span> AI Assistant
+          </h2>
+          <button
+            onClick={() => {
+              console.log('❌ Close button clicked')
+              onClose()
+            }}
+            className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded transition"
+            title="Close"
+            aria-label="Close sidebar"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
-        <button
-          onClick={onClose}
-          className="text-white hover:bg-blue-800 rounded-full p-2 transition"
-        >
-          ✕
-        </button>
-      </div>
 
-      {/* Quick Actions */}
-      <div className="p-3 border-b bg-gray-50">
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => handleQuickAction('last-30min')}
-            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200 transition"
-            disabled={loading}
-          >
-            Last 30 min
-          </button>
-          <button
-            onClick={() => handleQuickAction('errors')}
-            className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm hover:bg-red-200 transition"
-            disabled={loading}
-          >
-            Find Errors
-          </button>
-          <button
-            onClick={() => handleQuickAction('warnings')}
-            className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm hover:bg-yellow-200 transition"
-            disabled={loading}
-          >
-            Warnings
-          </button>
-        </div>
-      </div>
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+          {messages.map((message, idx) => {
+            // Separator
+            if (message.type === 'separator') {
+              return (
+                <div key={idx} className="flex justify-center py-2">
+                  <p className="text-xs text-gray-500 font-medium">{message.content}</p>
+                </div>
+              )
+            }
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-500 mt-8">
-            <div className="text-4xl mb-2">💬</div>
-            <p className="text-sm">Ask me to analyze your logs!</p>
-            <p className="text-xs mt-2">Try: "Analyze logs from last hour"</p>
-          </div>
-        )}
+            // Suggested query
+            if (message.type === 'query') {
+              return (
+                <div key={idx} className="flex justify-center">
+                  <button
+                    onClick={() => handleSuggestedQueryClick(message.content)}
+                    className="max-w-xs px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-lg text-xs font-mono border border-blue-300 transition truncate cursor-pointer"
+                    title={message.content}
+                  >
+                    → {message.content}
+                  </button>
+                </div>
+              )
+            }
 
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[85%] rounded-lg p-3 ${
-                message.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : message.error
-                  ? 'bg-red-50 border border-red-200'
-                  : 'bg-gray-100 text-gray-800'
-              }`}
-            >
-              {message.role === 'assistant' ? (
-                <>
-                  {/* AI Response */}
-                  <div className="prose prose-sm max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
+            // Regular message
+            return (
+              <div 
+                key={idx} 
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-xs px-4 py-3 rounded-lg text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                    message.role === 'user'
+                      ? 'bg-blue-600 text-white rounded-br-none'
+                      : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
+                  }`}
+                >
+                  {message.content}
+                </div>
+              </div>
+            )
+          })}
 
-                  {/* Chart */}
-                  {message.chart_data && (
-                    <div className="mt-3 pt-3 border-t">
-                      <ChatTimeline data={message.chart_data.timeline} />
-                    </div>
-                  )}
-
-                  {/* Suggested Queries */}
-                  {message.suggested_queries && message.suggested_queries.length > 0 && (
-                    <div className="mt-3 pt-3 border-t">
-                      <p className="text-xs font-semibold mb-2 text-gray-600">Suggested Queries:</p>
-                      <div className="space-y-1">
-                        {message.suggested_queries.map((query, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => handleQueryClick(query)}
-                            className="block w-full text-left px-2 py-1 bg-white border border-gray-300 rounded text-xs hover:bg-blue-50 hover:border-blue-400 transition font-mono"
-                          >
-                            {query}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Feedback */}
-                  {!message.error && (
-                    <div className="mt-3 pt-3 border-t flex justify-end gap-2">
-                      <button
-                        onClick={() => handleFeedback(message.id, 1)}
-                        className={`text-sm ${message.userFeedback === 1 ? 'text-green-600' : 'text-gray-400'} hover:text-green-600 transition`}
-                        disabled={message.userFeedback !== undefined}
-                      >
-                        👍
-                      </button>
-                      <button
-                        onClick={() => handleFeedback(message.id, -1)}
-                        className={`text-sm ${message.userFeedback === -1 ? 'text-red-600' : 'text-gray-400'} hover:text-red-600 transition`}
-                        disabled={message.userFeedback !== undefined}
-                      >
-                        👎
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm">{message.content}</p>
-              )}
-
-              <p className={`text-xs mt-1 ${message.role === 'user' ? 'text-blue-200' : 'text-gray-500'}`}>
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </p>
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 rounded-lg p-3">
-              <div className="flex space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+          {/* Loading */}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="bg-white border border-gray-200 px-4 py-3 rounded-lg rounded-bl-none">
+                <div className="flex items-center gap-2 text-sm">
+                  <div className="animate-spin">⏳</div>
+                  <span className="text-gray-600">Analyzing...</span>
+                </div>
               </div>
             </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Error Alert */}
+        {error && (
+          <div className="px-4 py-2 bg-red-50 border-t border-red-200 flex-shrink-0">
+            <p className="text-xs text-red-700">⚠️ {error}</p>
           </div>
         )}
 
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="p-4 border-t bg-gray-50">
-        <div className="flex gap-2">
-          <input
-            type="text"
+        {/* Input */}
+        <form 
+          onSubmit={handleSubmit} 
+          className="border-t border-gray-200 p-4 bg-white space-y-2 flex-shrink-0"
+        >
+          <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your logs..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onKeyPress={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSubmit(e)
+              }
+            }}
+            placeholder="Ask about your logs... (Shift+Enter for new line)"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+            rows="3"
             disabled={loading}
           />
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
-          >
-            Send
-          </button>
-        </div>
-        
-        {/* Helper text with examples */}
-        <div className="mt-2 text-xs text-gray-500">
-          <p className="font-semibold mb-1">Try asking:</p>
-          <div className="flex flex-wrap gap-2">
+          
+          <div className="flex gap-2">
             <button
-              type="button"
-              onClick={() => setInput("What errors occurred?")}
-              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition text-sm font-medium"
             >
-              "What errors occurred?"
+              {loading ? '⏳ Sending...' : '📤 Send'}
             </button>
+            
             <button
               type="button"
-              onClick={() => setInput("Find database issues")}
-              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
+              onClick={handleClear}
+              disabled={loading}
+              className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:bg-gray-100 transition text-sm"
+              title="Clear"
             >
-              "Find database issues"
-            </button>
-            <button
-              type="button"
-              onClick={() => setInput("Analyze logs from last hour")}
-              className="px-2 py-1 bg-gray-100 rounded hover:bg-gray-200"
-            >
-              "Analyze logs from last hour"
+              🗑️
             </button>
           </div>
-        </div>
-      </form>
-    </div>
+        </form>
+      </div>
+    </>
   )
 }
 

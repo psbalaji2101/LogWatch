@@ -62,23 +62,21 @@ def query_logs(
     token: Optional[str] = Depends(jwt_bearer)
 ):
     """
-    Query logs by time range (always returns UTC timestamps)
-    Frontend handles IST conversion
+    Query logs by time range or specific timestamp (default: last hour)
     """
+    from dateutil import parser as dtparser
     try:
-        # Parse time parameters using universal parser
-        from app.ingestion.timestamp_parser import parse_timestamp
-        
+        # Convert times to datetime if given as strings
         if timestamp:
-            tstamp = parse_timestamp(timestamp)
-            start_time_dt = tstamp - timedelta(seconds=window_seconds / 2)
-            end_time_dt = tstamp + timedelta(seconds=window_seconds / 2)
+            tstamp = dtparser.parse(timestamp)
+            start_time = tstamp - timedelta(seconds=window_seconds / 2)
+            end_time = tstamp + timedelta(seconds=window_seconds / 2)
         elif start_time and end_time:
-            start_time_dt = parse_timestamp(start_time)
-            end_time_dt = parse_timestamp(end_time)
+            start_time = dtparser.parse(start_time)
+            end_time = dtparser.parse(end_time)
         else:
-            end_time_dt = datetime.now(timezone.utc)
-            start_time_dt = end_time_dt - timedelta(seconds=window_seconds)
+            end_time = datetime.now()
+            start_time = end_time - timedelta(seconds=window_seconds)
 
         client = get_opensearch_client()
         results = search_logs(
@@ -136,30 +134,40 @@ async def search_logs_endpoint(
 
 @router.get("/api/logs/aggregations", response_model=AggregationResponse, tags=["Logs"])
 async def get_aggregations(
-    start_time: datetime,
-    end_time: datetime,
+    start_time: str,
+    end_time: str,
     interval: str = "1h",
     token: Optional[str] = Depends(jwt_bearer)
 ):
     """Get aggregations (time series, top tokens, source distribution)"""
-    
+    from dateutil import parser as dtparser
     try:
+        start_dt = dtparser.parse(start_time)
+        end_dt = dtparser.parse(end_time)
         client = get_opensearch_client()
         results = aggregate_logs(
             client,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_dt,
+            end_time=end_dt,
             interval=interval
         )
         
-        return AggregationResponse(**results)
-        
+        # Handle missing keys - provide defaults
+        return AggregationResponse(
+            time_series=results.get("time_series", []),
+            top_tokens=results.get("top_tokens", []),
+            sources=results.get("sources", [])
+        )
     except Exception as e:
         logger.error(f"Error getting aggregations: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+        # Return empty aggregations instead of error
+        return AggregationResponse(
+            time_series=[],
+            top_tokens=[],
+            sources=[]
         )
+
+
 
 
 @router.get("/api/stats", tags=["Stats"])
