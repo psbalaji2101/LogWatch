@@ -17,6 +17,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+from datetime import datetime  # ← Change from str to datetime
+
 class LogEvent(BaseModel):
     """Log event model"""
     timestamp: Optional[datetime] = None
@@ -26,6 +30,18 @@ class LogEvent(BaseModel):
     tokens: List[str] = []
     fields: Dict[str, Any] = {}
     ingest_id: Optional[str] = None
+    
+    # Chunk fields
+    chunk_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    summary_cached: Optional[bool] = None
+    
+    # ✅ NEW: Store whether timestamp was inferred
+    timestamp_inferred: Optional[bool] = False
+    
+    class Config:
+        extra = "allow"
+
 
     # If you sometimes return chunk logs:
     chunk_id: Optional[str] = None

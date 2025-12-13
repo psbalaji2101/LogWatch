@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Ingestion
     logs_directory: str = "/logs_in"
     checkpoint_db: str = "/data/checkpoints.db"
-    batch_size: int = 1000
+    batch_size: int = 200
     max_workers: int = 4
     poll_interval_seconds: int = 1
     

@@ -17,6 +17,8 @@ from app.auth.jwt_handler import create_access_token, verify_password, hash_pass
 from app.auth.jwt_bearer import jwt_bearer
 from app.search.client import get_opensearch_client, search_logs, aggregate_logs
 from app.config import settings
+from datetime import datetime, timezone, timedelta
+from dateutil import parser as dtparser
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     
     return TokenResponse(access_token=token)
 
+IST = timezone(timedelta(hours=5, minutes=30))
 
 @router.get("/api/logs", response_model=LogQueryResponse, tags=["Logs"])
 def query_logs(
@@ -78,8 +81,8 @@ def query_logs(
         client = get_opensearch_client()
         results = search_logs(
             client,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time_dt,
+            end_time=end_time_dt,
             source_file=source_file,
             page=page,
             page_size=page_size

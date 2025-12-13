@@ -23,8 +23,9 @@ def get_index_template():
                 "properties": {
                     # === CORE FIELDS ===
                     "timestamp": {
-                        "type": "date",
-                        "format": "strict_date_optional_time||epoch_millis"
+                        "type": "text",
+                        # "format": "strict_date_optional_time||epoch_millis"
+                        "analyzer": "standard"
                     },
                     "source_file": {
                         "type": "text",

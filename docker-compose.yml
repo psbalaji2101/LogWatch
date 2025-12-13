@@ -33,6 +33,28 @@ services:
       timeout: 10s
       retries: 5
 
+  opensearch-dashboards:
+      image: opensearchproject/opensearch-dashboards:2.11.0
+      container_name: opensearch-dashboards
+      ports:
+        - "5601:5601"
+      environment:
+        # point to the opensearch service inside the compose network
+        OPENSEARCH_HOSTS: '["https://opensearch-node1:9200"]'
+        # credentials for the initial admin (dev only). Match OPENSEARCH_INITIAL_ADMIN_PASSWORD in opensearch.
+        OPENSEARCH_USERNAME: "admin"
+        OPENSEARCH_PASSWORD: "admin"
+        I18N_LOCALE: "en"
+        # dev: if using self-signed certs, disable verification (NOT for production)
+        OPENSEARCH_SSL_VERIFICATIONMODE: "none"
+        # make Dashboards bind on all interfaces
+        SERVER_HOST: "0.0.0.0"
+      depends_on:
+        - opensearch-node1
+      networks:
+        - logwatch-net
+      restart: unless-stopped
+
   backend:
     build:
       context: ./backend
