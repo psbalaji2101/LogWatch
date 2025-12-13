@@ -1,4 +1,4 @@
-"""ingestion worker"""
+"""Fixed ingestion worker - handles STRING timestamps"""
 
 import asyncio
 import logging
@@ -78,8 +78,11 @@ class IngestionWorker:
                 parsed = self._parse_line(line)
                 
                 # Create document
+                # FIXED: timestamp is now STRING, not datetime
+                timestamp = parsed['timestamp'] if parsed['timestamp'] else datetime.utcnow().isoformat()
+                
                 doc = {
-                    'timestamp': parsed['timestamp'].isoformat() if parsed['timestamp'] else datetime.now().isoformat(),
+                    'timestamp': timestamp,  # STRING - no .isoformat() call
                     'source_file': file_path,
                     'line_number': line_number,
                     'raw_line': line,
@@ -125,7 +128,7 @@ class IngestionWorker:
         
         # Should never reach here (HeuristicParser always succeeds)
         return {
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.utcnow().isoformat(),
             'fields': {},
             'tokens': []
         }

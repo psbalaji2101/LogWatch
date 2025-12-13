@@ -17,6 +17,8 @@ from app.auth.jwt_handler import create_access_token, verify_password, hash_pass
 from app.auth.jwt_bearer import jwt_bearer
 from app.search.client import get_opensearch_client, search_logs, aggregate_logs
 from app.config import settings
+from datetime import datetime, timezone, timedelta
+from dateutil import parser as dtparser
 
 logger = logging.getLogger(__name__)
 
@@ -46,43 +48,55 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     
     return TokenResponse(access_token=token)
 
+IST = timezone(timedelta(hours=5, minutes=30))
 
 @router.get("/api/logs", response_model=LogQueryResponse, tags=["Logs"])
-async def query_logs(
-    start_time: Optional[datetime] = None,
-    end_time: Optional[datetime] = None,
-    timestamp: Optional[datetime] = None,
-    window_seconds: int = 60,
+def query_logs(
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    timestamp: Optional[str] = None,
+    window_seconds: int = 3600,
     source_file: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
     token: Optional[str] = Depends(jwt_bearer)
 ):
-    """Query logs by time range or specific timestamp"""
-    
+    """
+    Query logs by time range (always returns UTC timestamps)
+    Frontend handles IST conversion
+    """
     try:
-        # Handle timestamp with window
+        # Parse time parameters using universal parser
+        from app.ingestion.timestamp_parser import parse_timestamp
+        
         if timestamp:
-            start_time = timestamp - timedelta(seconds=window_seconds/2)
-            end_time = timestamp + timedelta(seconds=window_seconds/2)
-        
-        # Default to last hour if no time specified
-        if not start_time or not end_time:
-            end_time = datetime.now()
-            start_time = end_time - timedelta(hours=1)
-        
+            tstamp = parse_timestamp(timestamp)
+            start_time_dt = tstamp - timedelta(seconds=window_seconds / 2)
+            end_time_dt = tstamp + timedelta(seconds=window_seconds / 2)
+        elif start_time and end_time:
+            start_time_dt = parse_timestamp(start_time)
+            end_time_dt = parse_timestamp(end_time)
+        else:
+            end_time_dt = datetime.now(timezone.utc)
+            start_time_dt = end_time_dt - timedelta(seconds=window_seconds)
+
         client = get_opensearch_client()
         results = search_logs(
             client,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time_dt,
+            end_time=end_time_dt,
             source_file=source_file,
             page=page,
             page_size=page_size
         )
-        
-        return LogQueryResponse(**results)
-        
+
+        log_models = [LogEvent(**log) for log in results["logs"]]
+        return LogQueryResponse(
+            total=results["total"],
+            page=page,
+            page_size=page_size,
+            logs=log_models
+        )
     except Exception as e:
         logger.error(f"Error querying logs: {e}")
         raise HTTPException(
