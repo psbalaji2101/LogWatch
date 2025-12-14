@@ -420,5 +420,3 @@ MIT License - See LICENSE file for details
 Version: 1.0.0 
 Created: September 2025
 Last Updated: November 2025
-=======
->>>>>>> Stashed changes
