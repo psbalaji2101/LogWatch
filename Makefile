@@ -94,3 +94,6 @@ install-local:
 	cd backend && python3.11 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 	cd frontend && npm install
 	@echo "Local installation complete!"
+
+ingest:
+	docker compose exec backend python -m app.cli.ingest --directory /logs_in

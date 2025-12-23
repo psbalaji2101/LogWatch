@@ -208,6 +208,9 @@
 """OpenSearch client and operations"""
 
 from opensearchpy import OpenSearch, helpers
+from opensearchpy.exceptions import TransportError
+import os
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
@@ -241,6 +244,10 @@ def bulk_index_logs(client: OpenSearch, logs: List[Dict[str, Any]]) -> Dict:
     """Bulk index logs to OpenSearch"""
     if not logs:
         return {"success": 0, "errors": 0}
+    # Allow disabling indexing via env var for debugging or offline testing
+    if os.getenv("OPENSEARCH_DISABLE_INDEXING", "0") in ("1", "true", "True"):
+        logger.warning("OPENSEARCH_DISABLE_INDEXING set: skipping actual bulk index (dry-run)")
+        return {"success": len(logs), "errors": 0}
 
     actions = []
     for log in logs:
@@ -248,13 +255,58 @@ def bulk_index_logs(client: OpenSearch, logs: List[Dict[str, Any]]) -> Dict:
         index_name = f"{settings.opensearch_index_prefix}-{date_str}"
         actions.append({"_index": index_name, "_source": log})
 
-    try:
-        success, errors = helpers.bulk(client, actions, chunk_size=settings.batch_size, raise_on_error=False)
-        logger.info(f"Bulk indexed {success} logs, {len(errors) if errors else 0} errors")
-        return {"success": success, "errors": len(errors) if errors else 0}
-    except Exception as e:
-        logger.error(f"Bulk index error: {e}")
-        raise
+    # Retry/backoff strategy for transient OpenSearch rejections (HTTP 429)
+    max_attempts = 5
+    backoff_base = 1.0
+    attempt = 0
+    last_exc = None
+
+    while attempt < max_attempts:
+        try:
+            success, errors = helpers.bulk(client, actions, chunk_size=max(1, settings.batch_size), raise_on_error=False)
+            logger.info(f"Bulk indexed {success} logs, {len(errors) if errors else 0} errors")
+            return {"success": success, "errors": len(errors) if errors else 0}
+
+        except TransportError as te:
+            last_exc = te
+            # If 429, apply backoff and retry with smaller chunk sizes
+            status_code = getattr(te, 'status_code', None)
+            if status_code == 429:
+                attempt += 1
+                backoff = backoff_base * (2 ** (attempt - 1))
+                logger.warning(f"OpenSearch 429 rejected_execution (attempt {attempt}/{max_attempts}), backoff {backoff}s; reducing chunk_size and retrying")
+                # Reduce chunk size to lessen pressure
+                try_chunk = max(1, int(settings.batch_size / (attempt + 1)))
+                time.sleep(backoff)
+                # retry with smaller chunk
+                try:
+                    success, errors = helpers.bulk(client, actions, chunk_size=try_chunk, raise_on_error=False)
+                    logger.info(f"Bulk indexed {success} logs after retry, {len(errors) if errors else 0} errors")
+                    return {"success": success, "errors": len(errors) if errors else 0}
+                except TransportError as te2:
+                    last_exc = te2
+                    logger.warning(f"Retry attempt failed with TransportError: {te2}")
+                    continue
+                except Exception as e2:
+                    last_exc = e2
+                    logger.warning(f"Retry attempt failed: {e2}")
+                    continue
+            else:
+                # Non-429 transport error — re-raise after logging
+                logger.error(f"OpenSearch transport error: {te}")
+                raise
+
+        except Exception as e:
+            last_exc = e
+            logger.error(f"Bulk index error: {e}")
+            # For unknown errors, break and re-raise
+            break
+
+    # If we reach here, all retries failed
+    logger.error(f"Bulk index failed after {max_attempts} attempts")
+    if last_exc:
+        raise last_exc
+    return {"success": 0, "errors": len(logs)}
 
 
 def search_logs(

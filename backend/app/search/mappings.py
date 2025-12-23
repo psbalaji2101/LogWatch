@@ -22,10 +22,47 @@ def get_index_template():
             "mappings": {
                 "properties": {
                     # === CORE FIELDS ===
+                    "@timestamp": {
+                        "type": "date",
+                        "format": "strict_date_optional_time||epoch_millis"
+                    },
+                    # Legacy field kept for backward compatibility
                     "timestamp": {
                         "type": "text",
-                        # "format": "strict_date_optional_time||epoch_millis"
                         "analyzer": "standard"
+                    },
+                    "raw_timestamp": {
+                        "type": "keyword",
+                        "ignore_above": 512
+                    },
+                    "ingested_at": {
+                        "type": "date"
+                    },
+                    "timestamp_confidence": {
+                        "type": "float"
+                    },
+                    "timestamp_source": {
+                        "type": "keyword",
+                        "ignore_above": 256
+                    },
+                    "timestamp_origin": {
+                        "type": "keyword",
+                        "ignore_above": 256
+                    },
+                    "timestamp_assumed_year": {
+                        "type": "integer"
+                    },
+                    "timestamp_timezone_assumed": {
+                        "type": "keyword",
+                        "ignore_above": 64
+                    },
+                    "timestamp_format": {
+                        "type": "keyword",
+                        "ignore_above": 256
+                    },
+                    "timestamp_parse_error": {
+                        "type": "keyword",
+                        "ignore_above": 512
                     },
                     "source_file": {
                         "type": "text",

@@ -4,12 +4,15 @@ import asyncio
 import logging
 from typing import List, Dict, Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
+import json
 
 from app.ingestion.parsers import (
     JSONParser, CSVParser, RegexParser, HeuristicParser, ISO8601Parser, OTLPParser
 )
+from app.ingestion.timestamp_extractor import extract_timestamp
+from app.ingestion.timestamp_parser import parse_timestamp, TimestampParseResult
 from app.ingestion.checkpoint import CheckpointManager
 from app.search.client import get_opensearch_client, bulk_index_logs
 from app.config import settings
@@ -117,32 +120,94 @@ class IngestionWorker:
     
     def _parse_line(self, line: str) -> Dict[str, Any]:
         """Parse a log line using available parsers"""
-        
+        # Phase A — lossless extraction of raw timestamp substring
+        raw_ts = extract_timestamp(line)
+
+        parser_result = None
         for parser in self.parsers:
             if parser.can_parse(line):
                 try:
-                    return parser.parse(line)
+                    parser_result = parser.parse(line)
+                    break
                 except Exception as e:
                     logger.warning(f"Parser {parser.__class__.__name__} failed: {e}")
                     continue
-        
-        # Should never reach here (HeuristicParser always succeeds)
+
+        # If no parser returned a result, fallback to heuristic parser (should exist)
+        if not parser_result:
+            logger.debug("No parser matched line; using HeuristicParser fallback")
+            parser_result = HeuristicParser().parse(line)
+
+        # parser_result is expected to contain 'timestamp', 'fields', 'tokens'
+        parser_ts = parser_result.get('timestamp') if isinstance(parser_result, dict) else None
+        if isinstance(parser_ts, datetime):
+            parser_dt = parser_ts
+        else:
+            parser_dt = None
+
+        # Phase B — normalization + scoring
+        norm = parse_timestamp(raw_ts, parser_dt)
+
+        ingested_at = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+        # Decide canonical @timestamp based on confidence threshold
+        threshold = 0.7
+        timestamp_source = norm.source
+        assumed_year = norm.assumed_year
+        timezone_assumed = norm.timezone_assumed
+
+        if norm.parsed_datetime and norm.confidence >= threshold:
+            at_timestamp = norm.parsed_datetime.isoformat()
+            parse_error = None
+            timestamp_origin = 'normalized'
+        else:
+            # Explicit fallback to ingestion time; record failure metadata
+            at_timestamp = ingested_at.isoformat()
+            parse_error = norm.error or 'low_confidence'
+            timestamp_origin = 'ingested_fallback'
+
+        # Keep legacy 'timestamp' field for backward compatibility (string)
+        legacy_timestamp = at_timestamp
+
+        # Build normalized document (keeps existing fields)
         return {
-            'timestamp': datetime.utcnow().isoformat(),
-            'fields': {},
-            'tokens': []
+            'timestamp': legacy_timestamp,
+            '@timestamp': at_timestamp,
+            'raw_timestamp': raw_ts,
+            'ingested_at': ingested_at.isoformat(),
+            'timestamp_confidence': float(norm.confidence),
+            'timestamp_format': norm.format,
+            'timestamp_source': timestamp_source,
+            'timestamp_origin': timestamp_origin,
+            'timestamp_assumed_year': assumed_year,
+            'timestamp_timezone_assumed': timezone_assumed,
+            'timestamp_parse_error': parse_error,
+            'fields': parser_result.get('fields', {}),
+            'tokens': parser_result.get('tokens', [])
         }
     
     def _flush_batch(self, batch: List[Dict]):
         """Flush batch to OpenSearch"""
-        
         if not batch:
             return
-        
+
         try:
             client = get_opensearch_client()
             result = bulk_index_logs(client, batch)
             logger.info(f"Flushed batch: {result['success']} successful, {result['errors']} errors")
         except Exception as e:
-            logger.error(f"Failed to flush batch: {e}")
-            raise
+            # Do not crash the whole ingestion run for transient indexing failures.
+            # Persist failed batch to disk for later inspection and reprocessing.
+            try:
+                failed_dir = Path(settings.checkpoint_db).parent / "failed_batches"
+                failed_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.utcnow().strftime('%Y%m%dT%H%M%S')
+                filename = failed_dir / f"failed_batch_{ts}.ndjson"
+                with open(filename, 'w', encoding='utf-8') as fh:
+                    for doc in batch:
+                        fh.write(json.dumps(doc, default=str) + "\n")
+                logger.error(f"Failed to flush batch: {e}. Persisted {len(batch)} logs to {filename}")
+            except Exception as ex2:
+                logger.error(f"Failed to persist failed batch: {ex2}")
+            # Do NOT crash ingestion on transient indexing errors; continue processing.
+            return

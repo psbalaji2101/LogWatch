@@ -261,58 +261,6 @@ class RegexParser(BaseParser):
         # No pattern matched
         logger.warning(f"Line passed can_parse but no pattern matched: {line[:100]}")
         return None
-        Check if this parser can handle the line.
-        Returns True if line has a log level (required).
-        """
-        if not line or not isinstance(line, str):
-            return False
-        
-        # Check if line has a log level (required for ingestion)
-        has_level = bool(self._extract_level(line))
-        return has_level
-    
-    def parse(self, line: str) -> Dict[str, Any]:
-        """
-        Parse log line using regex patterns.
-        
-        IMPORTANT: Timestamp is stored as STRING, no conversion.
-        
-        Returns:
-            Dict with timestamp (STRING), fields, tokens
-            or None if cannot parse or no level found
-        """
-        if not line:
-            return None
-        
-        # Extract log level (required)
-        level = self._extract_level(line)
-        if not level:
-            return None
-        
-        # Try each pattern to extract fields
-        fields = {}
-        pattern_name = 'custom'
-        
-        for pname, pattern in self.patterns.items():
-            match = pattern.search(line)
-            if match:
-                fields = match.groupdict()
-                pattern_name = pname
-                break
-        
-        # Extract timestamp as STRING (no parsing, no conversion)
-        timestamp = extract_timestamp(line)
-        
-        return {
-            'timestamp': timestamp,  # STRING, not datetime!
-            'fields': {
-                **fields,
-                'level': level,
-                'service': self._extract_service(line, fields),
-                'pattern': pattern_name
-            },
-            'tokens': self.tokenize(line)
-        }
     
     def _extract_level(self, line: str) -> str:
         """Extract log level from line - REQUIRED"""

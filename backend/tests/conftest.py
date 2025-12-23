@@ -4,7 +4,17 @@ import pytest
 import asyncio
 from httpx import AsyncClient
 
-from app.main import app
+import os
+
+# In some test contexts (CI or unit-only runs) it's useful to skip importing
+# the full FastAPI app to avoid import-time side effects (DB connections,
+# password hashing backends, etc.). Tests that need the app should ensure this
+# environment variable is not set.
+if os.environ.get('SKIP_APP_IMPORT') != '1':
+    from app.main import app
+else:
+    app = None
+
 from app.config import settings
 
 

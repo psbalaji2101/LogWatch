@@ -1,258 +1,184 @@
-"""
-Universal timestamp parser - handles ANY timestamp format
-Acts as a log parsing expert - tries multiple strategies
+"""Timestamp normalization helper.
+
+This module implements Phase B (Normalization) of the two-phase timestamp
+strategy. It accepts a raw timestamp string (Phase A extractor output) and/or
+an already parsed datetime coming from existing parsers and returns a
+TimestampParseResult describing the outcome. No existing parser interfaces are
+changed; this module orchestrates parsing and scoring.
 """
 
+from __future__ import annotations
+
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from dateutil import parser as dateutil_parser
 import logging
 
 logger = logging.getLogger(__name__)
 
-# IST timezone (UTC+5:30)
-IST = timezone(timedelta(hours=5, minutes=30))
 
-class TimestampParser:
+@dataclass
+class TimestampParseResult:
+    parsed_datetime: Optional[datetime]
+    confidence: float
+    format: Optional[str]
+    error: Optional[str]
+    source: Optional[str] = None  # 'extracted', 'parser', 'dateutil'
+    assumed_year: Optional[int] = None
+    timezone_assumed: Optional[str] = None
+
+
+class TimestampNormalizer:
+    """Normalize timestamp strings using multiple strategies and score them.
+
+    Confidence guide (examples):
+      - Exact ISO with timezone: 1.0
+      - Epoch seconds/ms: 0.95
+      - Pattern match with timezone offset: 0.9
+      - Pattern match without timezone (assume naive UTC): 0.8
+      - dateutil fallback: 0.72
+      - heuristic/ambiguous parse: 0.6
+      - failure: 0.0
     """
-    Universal timestamp parser supporting 20+ formats
-    
-    Strategy:
-    1. Try 12 specific patterns (fastest)
-    2. Fallback to dateutil parser (catches 95% of edge cases)
-    3. Use ingestion time if all fails
-    """
-    
+
     def __init__(self):
         self.patterns = self._compile_patterns()
-    
+
     def _compile_patterns(self) -> dict:
-        """Compile regex patterns for different timestamp formats"""
         return {
-            # 1. ISO 8601 with Z (UTC)
-            'iso_8601_z': re.compile(
-                r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)',
-                re.IGNORECASE
-            ),
-            
-            # 2. ISO 8601 with timezone offset (+05:30, -08:00)
-            'iso_8601_tz': re.compile(
-                r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})',
-                re.IGNORECASE
-            ),
-            
-            # 3. ISO with space instead of T
-            'iso_space': re.compile(
-                r'(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?)',
-                re.IGNORECASE
-            ),
-            
-            # 4. Unix epoch (seconds)
-            'unix_epoch_sec': re.compile(
-                r'\b(\d{10})(?:\.\d+)?\b'
-            ),
-            
-            # 5. Unix epoch (milliseconds)
-            'unix_epoch_ms': re.compile(
-                r'\b(\d{13})(?:\.\d+)?\b'
-            ),
-            
-            # 6. Syslog format (Nov 24 19:55:25)
-            'syslog': re.compile(
-                r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})',
-                re.IGNORECASE
-            ),
-            
-            # 7. Apache/Nginx format (24/Nov/2025:19:55:25 +0530)
-            'apache_nginx': re.compile(
-                r'(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4})'
-            ),
-            
-            # 8. Custom dot format (2025.11.24 03:33:45)
-            'dot_format': re.compile(
-                r'(\d{4}\.\d{2}\.\d{2}\s\d{2}:\d{2}:\d{2})'
-            ),
-            
-            # 9. Date slash format (2025/11/24 - 07:22:28)
-            'slash_format': re.compile(
-                r'(\d{4}/\d{2}/\d{2}\s-?\s\d{2}:\d{2}:\d{2})'
-            ),
-            
-            # 10. Go/Kubernetes format (I1124 19:55:25.125155)
-            'go_format': re.compile(
-                r'([A-Z]\d{4}\s\d{2}:\d{2}:\d{2}\.\d+)'
-            ),
-            
-            # 11. Java format (Nov 24, 2025 4:15:17 PM)
-            'java_format': re.compile(
-                r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(AM|PM)',
-                re.IGNORECASE
-            ),
-            
-            # 12. RFC 2822 format (Thu, 24 Nov 2025 19:55:25 +0530)
-            'rfc2822': re.compile(
-                r'(\w{3},?\s+\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4})',
-                re.IGNORECASE
-            ),
+            'iso_8601_z': re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)', re.IGNORECASE),
+            'iso_8601_tz': re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:?\d{2})', re.IGNORECASE),
+            'iso_space': re.compile(r'(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?)', re.IGNORECASE),
+            'unix_epoch_ms': re.compile(r'\b(\d{13})\b'),
+            'unix_epoch_sec': re.compile(r'\b(\d{10})\b'),
+            'dot_format': re.compile(r'(\d{4}\.\d{2}\.\d{2}\s\d{2}:\d{2}:\d{2}(?:\.\d+)?)'),
+            'apache_nginx': re.compile(r'(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4})'),
+            'syslog': re.compile(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}', re.IGNORECASE),
+            'rfc2822': re.compile(r'\w{3},?\s+\d{1,2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}'),
+            'go_format': re.compile(r'[A-Z]\d{4}\s\d{2}:\d{2}:\d{2}\.\d+'),
+            'java_format': re.compile(r'\w{3}\s+\d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+(?:AM|PM)', re.IGNORECASE),
         }
-    
-    def parse(self, timestamp_str: str, fallback_to_now: bool = True) -> datetime:
-        """
-        Parse ANY timestamp format to datetime (UTC)
-        
+
+    def parse(self, raw_ts: Optional[str], parser_dt: Optional[datetime] = None) -> TimestampParseResult:
+        """Attempt to normalize timestamp and assign confidence.
+
         Args:
-            timestamp_str: Raw timestamp string from log
-            fallback_to_now: If True, use current time if parsing fails
-        
+            raw_ts: the verbatim raw timestamp substring (Phase A output)
+            parser_dt: an already-parsed datetime (from existing parser), optional
+
         Returns:
-            datetime object in UTC (naive, or with UTC timezone)
-        
-        Raises:
-            ValueError: If parsing fails and fallback_to_now=False
+            TimestampParseResult
         """
-        
-        if not timestamp_str:
-            if fallback_to_now:
-                logger.warning("Empty timestamp, using current time")
-                return datetime.utcnow()
-            raise ValueError("Empty timestamp string")
-        
-        timestamp_str = str(timestamp_str).strip()
-        
-        # Strategy 1: Try specific patterns (fast)
-        for pattern_name, pattern in self.patterns.items():
-            match = pattern.search(timestamp_str)
-            if match:
-                try:
-                    dt = self._parse_by_pattern(match, pattern_name, timestamp_str)
-                    if dt:
-                        logger.debug(f"✅ Parsed {pattern_name}: {timestamp_str} → {dt}")
-                        return self._normalize_to_utc(dt)
-                except Exception as e:
-                    logger.debug(f"Failed {pattern_name}: {e}")
-                    continue
-        
-        # Strategy 2: Fallback to dateutil (catches 95% of edge cases)
-        try:
-            dt = dateutil_parser.parse(timestamp_str)
-            logger.debug(f"✅ Parsed with dateutil: {timestamp_str} → {dt}")
-            return self._normalize_to_utc(dt)
-        except Exception as e:
-            logger.warning(f"⚠️  dateutil failed: {e}")
-        
-        # Strategy 3: Last resort - use ingestion time
-        if fallback_to_now:
-            logger.warning(f"⚠️  Could not parse timestamp '{timestamp_str}', using current time")
-            return datetime.utcnow()
-        else:
-            raise ValueError(f"Could not parse timestamp: {timestamp_str}")
-    
-    def _parse_by_pattern(self, match, pattern_name: str, original: str) -> datetime:
-        """Parse matched timestamp by pattern"""
-        
-        if pattern_name == 'iso_8601_z':
-            # 2025-11-24T07:16:47Z → datetime
-            return dateutil_parser.parse(match.group(1))
-        
-        elif pattern_name == 'iso_8601_tz':
-            # 2025-11-24T07:16:47+05:30 → datetime
-            return dateutil_parser.parse(match.group(1))
-        
-        elif pattern_name == 'iso_space':
-            # 2025-11-24 07:16:47 → datetime
-            return dateutil_parser.parse(match.group(1))
-        
-        elif pattern_name == 'unix_epoch_sec':
-            # 1732442387 → datetime
-            return datetime.utcfromtimestamp(int(match.group(1)))
-        
-        elif pattern_name == 'unix_epoch_ms':
-            # 1732442387125 → datetime
-            return datetime.utcfromtimestamp(int(match.group(1)) / 1000)
-        
-        elif pattern_name == 'syslog':
-            # Nov 24 19:55:25 → datetime (add current year)
-            mon, day, time_str = match.group(1), match.group(2), match.group(3)
-            dt_str = f"{datetime.utcnow().year} {mon} {day} {time_str}"
-            return dateutil_parser.parse(dt_str)
-        
-        elif pattern_name == 'apache_nginx':
-            # 24/Nov/2025:19:55:25 +0530 → datetime
-            return dateutil_parser.parse(match.group(1))
-        
-        elif pattern_name == 'dot_format':
-            # 2025.11.24 03:33:45 → datetime
-            ts = match.group(1).replace('.', '-')
-            return dateutil_parser.parse(ts)
-        
-        elif pattern_name == 'slash_format':
-            # 2025/11/24 - 07:22:28 → datetime
-            ts = match.group(1).replace('/', '-').replace(' - ', ' ')
-            return dateutil_parser.parse(ts)
-        
-        elif pattern_name == 'go_format':
-            # I1124 19:55:25.125155 → datetime
-            ts_str = match.group(1)
-            month_day = ts_str[1:5]  # 1124 → 11/24
-            month = month_day[:2]
-            day = month_day[2:]
-            time_part = ts_str.split()[1]
-            dt_str = f"{datetime.utcnow().year}-{month}-{day} {time_part}"
-            return dateutil_parser.parse(dt_str)
-        
-        elif pattern_name == 'java_format':
-            # Nov 24, 2025 4:15:17 PM → datetime
-            return dateutil_parser.parse(original)
-        
-        elif pattern_name == 'rfc2822':
-            # Thu, 24 Nov 2025 19:55:25 +0530 → datetime
-            return dateutil_parser.parse(match.group(1))
-        
-        return None
-    
-    def _normalize_to_utc(self, dt: datetime) -> datetime:
-        """
-        Normalize datetime to UTC
-        Handles both naive and timezone-aware datetimes
-        """
-        
+
+        if raw_ts:
+            raw_ts = str(raw_ts).strip()
+            # Try strict patterns first
+            for name, pattern in self.patterns.items():
+                m = pattern.search(raw_ts)
+                if m:
+                    try:
+                        if name == 'iso_8601_z':
+                            dt = dateutil_parser.isoparse(m.group(1))
+                            dt = self._ensure_utc(dt)
+                            return TimestampParseResult(dt, 1.0, 'ISO-8601-Z', None, source='extracted')
+
+                        if name == 'iso_8601_tz':
+                            dt = dateutil_parser.parse(m.group(1))
+                            dt = self._ensure_utc(dt)
+                            return TimestampParseResult(dt, 0.95, 'ISO-8601-TZ', None, source='extracted')
+
+                        if name == 'unix_epoch_ms':
+                            dt = datetime.fromtimestamp(int(m.group(1)) / 1000.0, tz=timezone.utc)
+                            return TimestampParseResult(dt, 0.95, 'epoch_millis', None, source='extracted')
+
+                        if name == 'unix_epoch_sec':
+                            dt = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+                            return TimestampParseResult(dt, 0.95, 'epoch_seconds', None, source='extracted')
+
+                        if name in ('iso_space', 'dot_format', 'apache_nginx', 'rfc2822'):
+                            dt = dateutil_parser.parse(m.group(0))
+                            dt = self._ensure_utc(dt)
+                            # If pattern has no explicit timezone, mark slightly lower confidence
+                            conf = 0.9 if 'tz' in name else 0.85
+                            tz_assumed = None
+                            if dt.tzinfo is None:
+                                tz_assumed = 'UTC'
+                            return TimestampParseResult(dt, conf, name, None, source='extracted', timezone_assumed=tz_assumed)
+
+                        if name == 'syslog':
+                            # Syslog lacks year; assume current year but lower confidence
+                            year = datetime.utcnow().year
+                            dt = dateutil_parser.parse(f"{year} {m.group(0)}")
+                            dt = self._ensure_utc(dt)
+                            return TimestampParseResult(dt, 0.75, 'syslog', None, source='extracted', assumed_year=year)
+
+                        if name == 'go_format':
+                            # Build yyyy-mm-dd from mmdd and current year
+                            s = m.group(0)
+                            month_day = s[1:5]
+                            month = month_day[:2]
+                            day = month_day[2:]
+                            time_part = s.split()[1]
+                            dt = dateutil_parser.parse(f"{datetime.utcnow().year}-{month}-{day} {time_part}")
+                            dt = self._ensure_utc(dt)
+                            return TimestampParseResult(dt, 0.7, 'go_format', None, source='extracted', assumed_year=datetime.utcnow().year)
+
+                    except Exception as e:
+                        logger.debug(f"Pattern {name} matched but parse failed: {e}")
+                        # Continue to next strategy
+
+            # dateutil general fallback
+            try:
+                dt = dateutil_parser.parse(raw_ts)
+                dt = self._ensure_utc(dt)
+                # dateutil is powerful but can be ambiguous -> moderate confidence
+                tz_assumed = None
+                if dt.tzinfo is None:
+                    tz_assumed = 'UTC'
+                return TimestampParseResult(dt, 0.72, 'dateutil', None, source='extracted', timezone_assumed=tz_assumed)
+            except Exception as e:
+                logger.debug(f"dateutil failed for raw_ts '{raw_ts}': {e}")
+
+        # If parser already returned a datetime, use it with moderate confidence
+        if parser_dt:
+            try:
+                dt = self._ensure_utc(parser_dt)
+                # If there was no raw_ts provided, treat parser-only datetimes as lower-confidence
+                # to avoid silently trusting ambiguous parser heuristics.
+                confidence = 0.82 if raw_ts else 0.6
+                return TimestampParseResult(dt, confidence, 'parser_datetime', None, source='parser')
+            except Exception as e:
+                logger.debug(f"parser datetime present but normalization failed: {e}")
+
+        # All attempts failed
+        return TimestampParseResult(None, 0.0, None, 'could_not_parse')
+
+    def _ensure_utc(self, dt: datetime) -> datetime:
+        if dt is None:
+            return None
         if dt.tzinfo is None:
-            # Naive datetime - assume UTC
             return dt.replace(tzinfo=timezone.utc)
-        else:
-            # Timezone-aware - convert to UTC
-            return dt.astimezone(timezone.utc)
-    
-    def to_ist(self, dt: datetime) -> datetime:
-        """Convert UTC datetime to IST (for display purposes)"""
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(IST)
-    
-    def to_iso_string(self, dt: datetime) -> str:
-        """Convert datetime to ISO string"""
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat()
+        return dt.astimezone(timezone.utc)
 
-# Global instance
-_parser = None
 
-def get_timestamp_parser() -> TimestampParser:
-    """Get or create parser instance"""
-    global _parser
-    if _parser is None:
-        _parser = TimestampParser()
-    return _parser
+# Global instance for module-level convenience
+_normalizer = None
 
-def parse_timestamp(timestamp_str: str, fallback_to_now: bool = True) -> datetime:
+def get_timestamp_normalizer() -> TimestampNormalizer:
+    global _normalizer
+    if _normalizer is None:
+        _normalizer = TimestampNormalizer()
+    return _normalizer
+
+
+def parse_timestamp(raw_timestamp: Optional[str], parser_datetime: Optional[datetime] = None) -> TimestampParseResult:
+    """Convenience wrapper to produce a TimestampParseResult.
+
+    This function keeps backwards compatibility for callers who previously used
+    parse_timestamp to get a datetime: it now returns a TimestampParseResult.
     """
-    Parse timestamp helper function
-    
-    Usage:
-        dt = parse_timestamp("2025-11-24T07:16:47Z")
-        dt = parse_timestamp("1732442387")  # Unix epoch
-        dt = parse_timestamp("Nov 24 19:55:25")  # Syslog
-    """
-    parser = get_timestamp_parser()
-    return parser.parse(timestamp_str, fallback_to_now)
+    normalizer = get_timestamp_normalizer()
+    return normalizer.parse(raw_timestamp, parser_datetime)
+

@@ -28,7 +28,9 @@ router = APIRouter()
 USERS_DB = {
     settings.default_admin_user: {
         "username": settings.default_admin_user,
-        "hashed_password": hash_password(settings.default_admin_password)
+        # Protect against passlib/bcrypt limitation: max 72 bytes
+        # Truncate deterministically to avoid import-time exceptions in tests
+        "hashed_password": hash_password(settings.default_admin_password[:72])
     }
 }
 
@@ -81,8 +83,8 @@ def query_logs(
         client = get_opensearch_client()
         results = search_logs(
             client,
-            start_time=start_time_dt,
-            end_time=end_time_dt,
+            start_time=start_time,
+            end_time=end_time,
             source_file=source_file,
             page=page,
             page_size=page_size
