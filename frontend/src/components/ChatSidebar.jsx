@@ -61,7 +61,7 @@ function ChatSidebar({ isOpen, onClose, onSuggestedQuery }) {
       console.log('📤 Sending to API...')
       const result = await analyzeLogs({
         natural_language_query: userMessage,
-        time_window_minutes: 60
+        time_window_minutes: 30  // Default - will be overridden by NL parsing
       })
 
       console.log('✅ API Response:', result)
